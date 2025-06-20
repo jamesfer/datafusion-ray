@@ -9,9 +9,10 @@ use futures::Stream;
 use futures::StreamExt;
 use futures_util::FutureExt;
 use futures_util::stream::{iter, FusedStream};
-use crate::streaming::action_stream::Marker;
-use crate::streaming::operators::task_function::SItem;
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::model::stream_item::Marker;
 use crate::streaming::operators::utils::borrowed_stream::BorrowedStream;
+
 // struct Guard<'a> {
 //
 // }
@@ -163,8 +164,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use futures_util::stream::iter;
     use futures::StreamExt;
-    use crate::streaming::action_stream::Marker;
-    use crate::streaming::operators::task_function::SItem;
+    use crate::streaming::model::sitem::SItem;
+    use crate::streaming::model::stream_item::Marker;
     use crate::streaming::operators::utils::chunked_stream::ChunkedStream;
 
     #[tokio::test]

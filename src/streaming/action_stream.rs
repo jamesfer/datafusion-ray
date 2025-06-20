@@ -2,56 +2,14 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::DataFusionError;
 use futures::stream::Fuse;
+use futures::Stream;
 use futures_util::StreamExt;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use bytes::Buf;
-use futures::Stream;
-use prost::{DecodeError, Message};
-use serde::{Deserialize, Serialize};
-use crate::proto::generated::streaming as proto;
-
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-pub struct Marker {
-    pub checkpoint_number: u64,
-}
-
-impl Marker {
-    pub fn to_bytes(self) -> Vec<u8> {
-        proto::Marker { checkpoint_number: self.checkpoint_number }.encode_to_vec()
-    }
-
-    pub fn from_bytes(buffer: impl Buf) -> Result<Self, DecodeError> {
-        let proto_marker = proto::Marker::decode(buffer)?;
-        Ok(Self {
-            checkpoint_number: proto_marker.checkpoint_number,
-        })
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-pub enum StreamItem {
-    Marker(Marker),
-    RecordBatch(
-        #[serde(with = "crate::streaming::utils::serde_serialization::record_batch")]
-        RecordBatch
-    ),
-}
-
-impl From<RecordBatch> for StreamItem {
-    fn from(batch: RecordBatch) -> Self {
-        StreamItem::RecordBatch(batch)
-    }
-}
-
-impl From<Marker> for StreamItem {
-    fn from(marker: Marker) -> Self {
-        StreamItem::Marker(marker)
-    }
-}
+use crate::streaming::model::stream_item::{Marker, StreamItem, StreamResult};
 
 #[derive(Clone)]
 pub enum OrdinalStreamItem {
@@ -59,7 +17,6 @@ pub enum OrdinalStreamItem {
     RecordBatch(usize, RecordBatch),
 }
 
-pub type StreamResult = Result<StreamItem, DataFusionError>;
 pub type OrdinalStreamResult = Result<OrdinalStreamItem, DataFusionError>;
 
 pub trait ActionStream: Stream<Item=StreamResult> {

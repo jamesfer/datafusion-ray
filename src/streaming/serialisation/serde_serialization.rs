@@ -1,11 +1,11 @@
 use serde::de::{DeserializeSeed, Error, Visitor};
 
 pub mod record_batch {
-    use crate::streaming::utils::serde_serialization::record_batches;
     use arrow_array::RecordBatch;
     use serde::de::Error;
     use serde::{Deserializer, Serializer};
     use std::slice;
+    use crate::streaming::serialisation::serde_serialization::record_batches;
 
     pub fn serialize<S: Serializer>(record_batches: &RecordBatch, serializer: S) -> Result<S::Ok, S::Error> {
         record_batches::serialize(slice::from_ref(record_batches), serializer)
@@ -100,10 +100,10 @@ pub mod schema {
 }
 
 pub mod schema_ref {
-    use crate::streaming::utils::serde_serialization::schema;
     use arrow_schema::{Schema, SchemaRef};
     use serde::{Deserialize, Deserializer, Serializer};
     use std::sync::Arc;
+    use crate::streaming::serialisation::serde_serialization::schema;
 
     pub fn serialize<S: Serializer>(schema: &Schema, serializer: S) -> Result<S::Ok, S::Error> {
         schema::serialize(schema, serializer)
@@ -135,7 +135,7 @@ pub mod physical_expr_refs {
     // #[derive(Serialize)]
     // #[serde(transparent)]
     // struct SerializeSchema<'a> {
-    //     #[serde(serialize_with = "crate::streaming::utils::serde_serialization::schema::serialize")]
+    //     #[serde(serialize_with = "crate::streaming::serialisation::serde_serialization::schema::serialize")]
     //     schema: &'a Schema
     // }
     //

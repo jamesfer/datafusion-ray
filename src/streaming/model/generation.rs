@@ -6,16 +6,16 @@ use serde::{Deserialize, Serialize};
 use crate::streaming::partitioning::PartitionRange;
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct GenerationInputLocation {
+pub struct RemoteStreamLocation {
     pub address: String,
     pub offset_range: (usize, usize),
     pub partitions: PartitionRange,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct GenerationInputDetail {
+pub struct RemoteStreamDetails {
     pub stream_id: String,
-    pub locations: Vec<GenerationInputLocation>,
+    pub locations: Vec<RemoteStreamLocation>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,5 +34,5 @@ pub struct GenerationSpec {
 
 pub struct TaskSchedulingDetailsUpdate {
     pub generation: Option<GenerationSpec>,
-    pub input_details: Option<Vec<GenerationInputDetail>>,
+    pub input_details: Option<Vec<RemoteStreamDetails>>,
 }

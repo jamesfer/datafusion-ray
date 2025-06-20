@@ -1,7 +1,6 @@
-use crate::streaming::action_stream::StreamItem;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
-use crate::streaming::operators::utils::fiber_stream::FiberStream;
+use crate::streaming::model::stream_item::StreamItem;
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
+use crate::streaming::utils::fiber_stream::FiberStream;
 use crate::streaming::runtime::{DataChannelSender, Runtime};
 use async_trait::async_trait;
 use datafusion::common::DataFusionError;
@@ -14,9 +13,11 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeTuple;
 use tokio::sync::Mutex;
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::sitem::SItem;
 use crate::streaming::partitioning::PartitioningSpec;
 use crate::streaming::runtime::exchange_manager::data_channels::ChannelPartitioningDetails;
-use crate::streaming::utils::serde_serialization;
+use crate::streaming::serialisation::serde_serialization;
 
 #[derive(Clone)]
 pub struct RemoteExchangeOperator {
@@ -28,14 +29,14 @@ pub struct RemoteExchangeOperator {
 #[derive(Serialize)]
 struct InitialSerialization<'a> {
     output_stream_id: &'a str,
-    #[serde(with = "crate::streaming::utils::serde_serialization::schema")]
+    #[serde(with = "crate::streaming::serialisation::serde_serialization::schema")]
     schema: &'a SchemaRef,
 }
 
 #[derive(Deserialize)]
 struct InitialDeserialization {
     output_stream_id: String,
-    #[serde(with = "crate::streaming::utils::serde_serialization::schema_ref")]
+    #[serde(with = "crate::streaming::serialisation::serde_serialization::schema_ref")]
     schema: SchemaRef,
 }
 
@@ -294,10 +295,10 @@ impl CreateOperatorFunction2 for RemoteExchangeOperator {
 struct RemoteExchangeOperatorFunction {
     output_stream_id: String,
     runtime: Option<Arc<Runtime>>,
-    scheduling_details_state: Option<Arc<Mutex<(Vec<GenerationSpec>, Vec<GenerationInputDetail>)>>>,
+    scheduling_details_state: Option<Arc<Mutex<(Vec<GenerationSpec>, Vec<RemoteStreamDetails>)>>>,
     loaded_checkpoint: usize,
     data_channel: Option<DataChannelSender>,
-    scheduling_details: Option<Subscriber<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>>,
+    scheduling_details: Option<Subscriber<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>>,
     partitioning: Option<PartitioningSpec>,
 }
 
@@ -320,7 +321,7 @@ impl OperatorFunction2 for RemoteExchangeOperatorFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         _state_id: &str,
     ) -> Result<(), DataFusionError> {
         let scheduling_details_subscriber = scheduling_details.subscribe().await;

@@ -1,8 +1,7 @@
-use std::borrow::Cow;
 use crate::flight::FlightHandler;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec, TaskSchedulingDetailsUpdate};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails, TaskSchedulingDetailsUpdate};
 use crate::streaming::runtime::Runtime;
-use crate::streaming::task_definition_2::TaskDefinition2;
+use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::task_main_3::RunningTask;
 use crate::streaming::utils::test_utils::make_temp_dir;
 use datafusion::common::internal_datafusion_err;
@@ -19,19 +18,7 @@ use crate::streaming::state::file_system::{FileSystemStorage, TempdirFileSystemS
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InitialSchedulingDetails {
     pub generations: Vec<GenerationSpec>,
-    pub input_locations: Vec<GenerationInputDetail>,
-}
-
-impl InitialSchedulingDetails {
-    pub fn to_bytes(&self) -> Result<Vec<u8>, DataFusionError> {
-        match flexbuffers::to_vec(&self) {
-            Ok(bytes) => Ok(bytes),
-            Err(e) => Err(internal_datafusion_err!(
-                "Failed to serialize InitialSchedulingDetails to Flexbuffer: {}",
-                e
-            )),
-        }
-    }
+    pub input_locations: Vec<RemoteStreamDetails>,
 }
 
 pub struct WorkerProcess {
@@ -82,7 +69,7 @@ impl WorkerProcess {
 
     pub async fn start_task(
         &self,
-        task_definition: TaskDefinition2,
+        task_definition: TaskDefinition,
         initial_scheduling_details: InitialSchedulingDetails,
     ) -> Result<(), DataFusionError> {
         self.start_task_from(
@@ -94,7 +81,7 @@ impl WorkerProcess {
 
     pub async fn start_task_from(
         &self,
-        task_definition: TaskDefinition2,
+        task_definition: TaskDefinition,
         initial_scheduling_details: InitialSchedulingDetails,
         checkpoint: usize
     ) -> Result<(), DataFusionError> {
@@ -142,19 +129,17 @@ impl WorkerProcess {
 
 #[cfg(test)]
 mod tests {
-    use crate::streaming::action_stream::{Marker, StreamItem};
-    use crate::streaming::generation::{GenerationInputDetail, GenerationInputLocation, GenerationSpec};
+    use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails, RemoteStreamLocation};
     use crate::streaming::operators::count_star::CountStarOperator;
     use crate::streaming::operators::nested::NestedOperator;
-    use crate::streaming::operators::operator::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
+    use crate::streaming::operators::operator_definition::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
     use crate::streaming::operators::remote_exchange::RemoteExchangeOperator;
     use crate::streaming::operators::remote_source::remote_source::RemoteSourceOperator;
     use crate::streaming::operators::source::SourceOperator;
-    use crate::streaming::operators::task_function::SItem;
+    use crate::streaming::operators::operator_function::SItem;
     use crate::streaming::partitioning::{PartitionRange, PartitioningSpec};
     use crate::streaming::state::file_system::TempdirFileSystemStorage;
-    use crate::streaming::task_definition_2::TaskDefinition2;
-    use crate::streaming::utils::create_remote_stream::create_remote_stream_no_runtime;
+    use crate::streaming::model::task_definition::TaskDefinition;
     use crate::streaming::utils::retry::retry_future;
     use crate::streaming::utils::test_utils::make_temp_dir;
     use crate::streaming::worker_process::{InitialSchedulingDetails, WorkerProcess};
@@ -164,6 +149,8 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
     use tokio::{join, try_join};
+    use crate::streaming::model::stream_item::{Marker, StreamItem};
+    use crate::streaming::runtime::create_remote_stream::create_remote_stream_no_runtime;
     use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
 
     #[tokio::test]
@@ -173,7 +160,7 @@ mod tests {
         let test_batch = record_batch!(
             ("a", Int32, vec![1i32, 2, 3])
         ).unwrap();
-        let task_definition = TaskDefinition2 {
+        let task_definition = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -245,7 +232,7 @@ mod tests {
         let test_batch = record_batch!(
             ("a", Int32, vec![1i32, 2, 3])
         ).unwrap();
-        let source_task = TaskDefinition2 {
+        let source_task = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -284,7 +271,7 @@ mod tests {
                 outputs: vec![],
             },
         };
-        let exchange_task = TaskDefinition2 {
+        let exchange_task = TaskDefinition {
             task_id: "task2".to_string(),
             operator: OperatorDefinition {
                 id: "nested2".to_string(),
@@ -341,9 +328,9 @@ mod tests {
                     partitions: PartitionRange::empty(),
                     start_conditions: vec![],
                 }],
-                input_locations: vec![GenerationInputDetail {
+                input_locations: vec![RemoteStreamDetails {
                     stream_id: "exchange_output1".to_string(),
-                    locations: vec![GenerationInputLocation {
+                    locations: vec![RemoteStreamLocation {
                         address: address1.to_string(),
                         offset_range: (0, 2 << 31),
                         partitions: PartitionRange::empty(),
@@ -378,7 +365,7 @@ mod tests {
             ("a", Int32, vec![1i32, 2, 3]),
             ("b", Int32, vec![111i32, 222, 333])
         ).unwrap();
-        let source_task = TaskDefinition2 {
+        let source_task = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -423,7 +410,7 @@ mod tests {
                 outputs: vec![],
             },
         };
-        let exchange_task1 = TaskDefinition2 {
+        let exchange_task1 = TaskDefinition {
             task_id: "task2".to_string(),
             operator: OperatorDefinition {
                 id: "nested2".to_string(),
@@ -458,7 +445,7 @@ mod tests {
                 outputs: vec![],
             },
         };
-        let exchange_task2 = TaskDefinition2 {
+        let exchange_task2 = TaskDefinition {
             task_id: "task3".to_string(),
             operator: OperatorDefinition {
                 id: "nested3".to_string(),
@@ -510,9 +497,9 @@ mod tests {
             },
         ).await.unwrap();
 
-        let input_detail = GenerationInputDetail {
+        let input_detail = RemoteStreamDetails {
             stream_id: "exchange_output1".to_string(),
-            locations: vec![GenerationInputLocation {
+            locations: vec![RemoteStreamLocation {
                 address: address1.to_string(),
                 offset_range: (0, 2 << 31),
                 partitions: PartitionRange::new(0, 2, 2),
@@ -627,7 +614,7 @@ mod tests {
             ("a", Int32, vec![4i32, 5, 6])
         ).unwrap();
 
-        let task_definition = TaskDefinition2 {
+        let task_definition = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -727,7 +714,7 @@ mod tests {
             ("a", Int32, vec![4i32, 5, 6])
         ).unwrap();
 
-        let task_definition = TaskDefinition2 {
+        let task_definition = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -814,7 +801,7 @@ mod tests {
         }
 
 
-        let task_definition2 = TaskDefinition2 {
+        let task_definition2 = TaskDefinition {
             task_id: "task1_2".to_string(),
             operator: OperatorDefinition {
                 id: "nested1_2".to_string(),
@@ -920,7 +907,7 @@ mod tests {
             ("a", Int32, vec![4i32, 5, 6])
         ).unwrap();
 
-        let task_definition = TaskDefinition2 {
+        let task_definition = TaskDefinition {
             task_id: "task1".to_string(),
             operator: OperatorDefinition {
                 id: "nested1".to_string(),
@@ -1008,7 +995,7 @@ mod tests {
         }
 
 
-        let task_definition2 = TaskDefinition2 {
+        let task_definition2 = TaskDefinition {
             task_id: "task1_2".to_string(),
             operator: OperatorDefinition {
                 id: "nested1_2".to_string(),

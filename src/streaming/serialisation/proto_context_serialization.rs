@@ -8,19 +8,6 @@ use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::protobuf::PhysicalExprNode;
 
-// pub trait TryFromProto<T> {
-//     type Error;
-//
-//     fn try_from_proto(session_context: &SessionContext, value: T) -> Result<Self, Self::Error>;
-// }
-
-// pub trait TryFromWithContext {
-//     type ProtoType;
-//
-//     fn try_into_proto(self, context: &SessionContext) -> Result<Self::ProtoType, DataFusionError>;
-//     fn try_from_proto(proto: Self::ProtoType, context: &SessionContext) -> Result<Self, DataFusionError>;
-// }
-
 pub trait ProtoSerializer: Sized {
     type ProtoType;
     type SerializerContext<'a>;

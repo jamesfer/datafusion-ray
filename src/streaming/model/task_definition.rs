@@ -1,22 +1,13 @@
 use serde::{Deserialize, Serialize};
-use datafusion::common::{internal_datafusion_err, DataFusionError};
-use crate::streaming::operators::operator::{OperatorDefinition, OperatorSpec};
+use crate::streaming::model::operator_definition::{OperatorDefinition, OperatorSpec};
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct TaskDefinition2 {
+pub struct TaskDefinition {
     pub task_id: String,
     pub operator: OperatorDefinition,
 }
 
-impl TaskDefinition2 {
-    pub fn to_bytes(&self) -> Result<Vec<u8>, DataFusionError> {
-        match flexbuffers::to_vec(&self) {
-            Ok(bytes) => Ok(bytes),
-            Err(e) => Err(internal_datafusion_err!(
-                "Failed to serialize TaskDefinition2 to Flexbuffer: {}", e
-            )),
-        }
-    }
+impl TaskDefinition {
 
     pub fn exchange_outputs(&self) -> Vec<String> {
         Self::get_exchange_outputs(&self.operator.spec)

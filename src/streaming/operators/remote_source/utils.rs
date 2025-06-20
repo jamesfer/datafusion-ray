@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use datafusion::common::DataFusionError;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec, GenerationStartOffset};
+use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec, GenerationStartOffset};
 use crate::streaming::partitioning::PartitionRange;
 
 pub fn find_current_generation<'a>(
@@ -31,7 +31,7 @@ pub fn get_addresses<'a>(
     partitions: &PartitionRange,
     checkpoint: usize,
     stream_ids: &[String],
-    input_details: &[GenerationInputDetail],
+    input_details: &[RemoteStreamDetails],
 ) -> Result<Vec<(String, String, PartitionRange)>, DataFusionError> { // returns (stream_id, address, partitions)
     Ok(stream_ids.iter()
         .map(|stream_id| {
@@ -52,7 +52,7 @@ pub fn get_addresses<'a>(
 fn get_addresses_for_stream(
     partitions: &PartitionRange,
     checkpoint: usize,
-    input_details: &GenerationInputDetail,
+    input_details: &RemoteStreamDetails,
 ) -> Result<Vec<(String, String, PartitionRange)>, DataFusionError> { // returns (stream_id, address, partitions)
     let mut all_found_partitions = Vec::new();
     let addresses = input_details.locations.iter()

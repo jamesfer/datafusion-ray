@@ -1,8 +1,7 @@
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::operator::OperatorDefinition;
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
 use crate::streaming::operators::utils::example_ref_storage::Store;
-use crate::streaming::operators::utils::fiber_stream::FiberStream;
+use crate::streaming::utils::fiber_stream::FiberStream;
 use crate::streaming::runtime::Runtime;
 use async_trait::async_trait;
 use datafusion::common::internal_datafusion_err;
@@ -15,6 +14,8 @@ use futures_util::TryStreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use crate::streaming::model::operator_definition::OperatorDefinition;
+use crate::streaming::model::sitem::SItem;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NestedOperator {
@@ -65,9 +66,9 @@ struct NestedOperatorFunction {
 #[async_trait]
 impl OperatorFunction2 for NestedOperatorFunction {
     async fn init(
-        &mut self, 
+        &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         _state_id: &str,
     ) -> Result<(), DataFusionError> {
         self.operator_functions.iter_mut()
@@ -207,20 +208,18 @@ where 'a : 'b // a must live longer than b
 mod tests {
     use crate::streaming::operators::identity::IdentityOperator;
     use crate::streaming::operators::nested::NestedOperator;
-    use crate::streaming::operators::operator::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
+    use crate::streaming::operators::operator_definition::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
     use crate::streaming::operators::source::SourceOperator;
-    use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
+    use crate::streaming::operators::operator_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
     use arrow::array::{ArrayRef, UInt64Array};
     use arrow::record_batch::RecordBatch;
     use futures::StreamExt;
     use futures_util::stream::{iter, FuturesUnordered};
     use std::sync::Arc;
     use eyeball::SharedObservable;
-    use local_ip_address::local_ip;
-    use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
+    use crate::streaming::model::generation::GenerationSpec;
     use crate::streaming::operators::utils::fiber_stream::SingleFiberStream;
     use crate::streaming::partitioning::PartitionRange;
-    use crate::streaming::runtime::Runtime;
     use crate::streaming::utils::test_utils::make_test_runtime;
 
     #[tokio::test]

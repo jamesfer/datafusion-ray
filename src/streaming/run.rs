@@ -3,27 +3,26 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use pyo3::PyResult;
 use datafusion::common::record_batch;
-use crate::python::py_utils::{collect_inner, stream_results};
-use crate::streaming::action_stream::{Marker, StreamItem};
-use crate::streaming::coordinator::{ActiveCoordinator, ComputeEnv, PythonResources, StaticCoordinator};
+use crate::python::compute_runtime::ComputeRuntime;
+use crate::streaming::coordinator::ActiveCoordinator;
+use crate::streaming::model::stream_item::{Marker, StreamItem};
 use crate::streaming::operators::count_by_key::CountByKeyOperator;
 use crate::streaming::operators::nested::NestedOperator;
-use crate::streaming::operators::operator::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
+use crate::streaming::model::operator_definition::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
 use crate::streaming::operators::remote_exchange::RemoteExchangeOperator;
 use crate::streaming::operators::remote_source::remote_source::RemoteSourceOperator;
 use crate::streaming::operators::source::SourceOperator;
-use crate::streaming::task_definition_2::TaskDefinition2;
+use crate::streaming::model::task_definition::TaskDefinition;
 
 // Called by the py_entrypoint
-pub async fn run(python_resources: Arc<PythonResources>) -> PyResult<()> {
+pub async fn run(compute_runtime: Arc<ComputeRuntime>) -> PyResult<()> {
     println!("Running program");
-    let compute_env = Arc::new(ComputeEnv::new(python_resources.clone()));
     let remote_checkpoint_tempdir = tempfile::tempdir()?;
     assert!(remote_checkpoint_tempdir.path().to_str().is_some(), "Temporary directory path is not valid UTF-8");
 
     let tasks = infinite_stream_tasks();
     let coordinator = ActiveCoordinator::start_single_copies(
-        compute_env.clone(),
+        compute_runtime.clone(),
         tasks,
         remote_checkpoint_tempdir.path().to_string_lossy().deref().to_string(),
     ).await?;
@@ -50,11 +49,11 @@ pub async fn run(python_resources: Arc<PythonResources>) -> PyResult<()> {
     Ok(())
 }
 
-pub fn infinite_stream_tasks() -> Vec<TaskDefinition2> {
+pub fn infinite_stream_tasks() -> Vec<TaskDefinition> {
     let test_batch = record_batch!(
         ("a", UInt64, vec![1u64, 2, 3, 1, 2, 1])
     ).unwrap();
-    let task = TaskDefinition2 {
+    let task = TaskDefinition {
         task_id: "task1".to_string(),
         operator: OperatorDefinition {
             id: "nested1".to_string(),
@@ -113,11 +112,11 @@ pub fn infinite_stream_tasks() -> Vec<TaskDefinition2> {
     vec![task]
 }
 
-pub fn get_tasks_inner() -> Vec<TaskDefinition2> {
+pub fn get_tasks_inner() -> Vec<TaskDefinition> {
     let test_batch = record_batch!(
         ("a", Int32, vec![1i32, 2, 3])
     ).unwrap();
-    let source_task = TaskDefinition2 {
+    let source_task = TaskDefinition {
         task_id: "task1".to_string(),
         operator: OperatorDefinition {
             id: "nested1".to_string(),
@@ -152,7 +151,7 @@ pub fn get_tasks_inner() -> Vec<TaskDefinition2> {
             outputs: vec![],
         },
     };
-    let exchange_task = TaskDefinition2 {
+    let exchange_task = TaskDefinition {
         task_id: "task2".to_string(),
         operator: OperatorDefinition {
             id: "nested2".to_string(),

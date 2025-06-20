@@ -7,12 +7,13 @@ use prost::Message;
 use futures_util::StreamExt;
 use tokio::sync::Mutex;
 use crate::proto::generated::streaming::StreamingFlightTicketData;
-use crate::streaming::action_stream::StreamItem;
-use crate::streaming::operators::task_function::SItem;
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::model::stream_item::StreamItem;
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::utils::sync_safe::SyncSafe;
-use crate::streaming::processor::stream_serialization::decode_flight_to_stream;
+use crate::streaming::serialisation::flight_stream_serialization::decode_flight_to_stream;
 use crate::streaming::runtime::Runtime;
+use crate::streaming::serialisation::proto_serialisation::SerialiseToProto;
 use crate::util::make_client;
 
 pub async fn create_remote_stream_no_runtime(
@@ -21,12 +22,13 @@ pub async fn create_remote_stream_no_runtime(
     partitions: PartitionRange,
 ) -> Result<Box<dyn Stream<Item=Result<SItem, DataFusionError>> + Send + Sync>, DataFusionError> {
     let ticket_data = StreamingFlightTicketData {
-        partitions: Some(partitions.into()),
+        partitions: Some(partitions.to_proto()),
         stream_id: stream_id.to_string(),
         // TODO
         checkpoint_number: 0,
     };
     let flight_ticket = Ticket { ticket: Bytes::from(ticket_data.encode_to_vec()) };
+
     let client = Arc::new(Mutex::new(make_client(address).await?));
     let client = &mut *client.lock().await;
     let flight_data_stream = client.do_get(flight_ticket).await
@@ -49,11 +51,12 @@ pub async fn create_remote_stream(
     partitions: PartitionRange,
 ) -> Result<Box<dyn Stream<Item=Result<SItem, DataFusionError>> + Send + Sync>, DataFusionError> {
     let ticket_data = StreamingFlightTicketData {
-        partitions: Some(partitions.into()),
+        partitions: Some(partitions.to_proto()),
         stream_id: stream_id.to_string(),
         // TODO
         checkpoint_number: 0,
     };
+
     let flight_ticket = Ticket { ticket: Bytes::from(ticket_data.encode_to_vec()) };
     let client = runtime.data_client_manager().get_client(address).await?;
     let client = &mut *client.lock().await;

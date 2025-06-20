@@ -3,7 +3,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use futures_util::StreamExt;
 use pin_project::pin_project;
-use crate::streaming::operators::task_function::SItem;
 
 #[pin_project]
 pub struct BorrowedStream<'a, S: ?Sized, T> {

@@ -6,11 +6,15 @@ use datafusion::error::DataFusionError;
 use datafusion::physical_expr::PhysicalExpr;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use crate::proto::generated::streaming as proto;
+use crate::streaming::serialisation::proto_context_serialization::ProtoSerializer;
+use crate::streaming::serialisation::proto_serialisation::SerialiseToProto;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Hash, Eq)]
 pub struct PartitionRange {
     start: usize,
     end: usize,
+    // TODO always use max u64?
     partitions: usize,
 }
 
@@ -93,8 +97,18 @@ impl PartitionRange {
     }
 }
 
-impl From<crate::proto::generated::streaming::PartitionRange> for PartitionRange {
-    fn from(proto: crate::proto::generated::streaming::PartitionRange) -> Self {
+impl SerialiseToProto for PartitionRange {
+    type ProtoType = proto::PartitionRange;
+
+    fn to_proto(&self) -> Self::ProtoType {
+        Self::ProtoType {
+            start: self.start as u64,
+            end: self.end as u64,
+            partitions: self.partitions as u64,
+        }
+    }
+
+    fn from_proto(proto: Self::ProtoType) -> Self {
         Self {
             start: proto.start as usize,
             end: proto.end as usize,
@@ -103,19 +117,9 @@ impl From<crate::proto::generated::streaming::PartitionRange> for PartitionRange
     }
 }
 
-impl Into<crate::proto::generated::streaming::PartitionRange> for PartitionRange {
-    fn into(self) -> crate::proto::generated::streaming::PartitionRange {
-        crate::proto::generated::streaming::PartitionRange {
-            start: self.start as u64,
-            end: self.end as u64,
-            partitions: self.partitions as u64,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartitioningSpec {
-    #[serde(with = "crate::streaming::utils::serde_serialization::physical_expr_refs")]
+    #[serde(with = "crate::streaming::serialisation::serde_serialization::physical_expr_refs")]
     pub expressions: Vec<Arc<dyn PhysicalExpr>>,
 }
 

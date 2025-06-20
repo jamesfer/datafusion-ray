@@ -1,99 +1,40 @@
-use std::sync::Arc;
-use arrow_array::RecordBatch;
-use futures::Stream;
-use pyo3::{PyObject, Python, Py, PyAny, Bound, PyResult};
-use crate::python::py_utils::{schedule_with_constant_partitions, schedule_without_partitions_inner, stream_results};
+use crate::python::compute_runtime::ComputeRuntime;
 use crate::python::remote_processor::RemoteProcessor;
-use crate::streaming::generation::{GenerationInputDetail, GenerationInputLocation, GenerationSpec};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails, RemoteStreamLocation};
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::partitioning::PartitionRange;
+use crate::streaming::runtime::create_remote_stream::create_remote_stream_no_runtime;
 use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
-use crate::streaming::task_definition_2::TaskDefinition2;
+use crate::streaming::state::file_system::PrefixedLocalFileSystemStorage;
+use crate::streaming::utils::retry::retry_future;
 use crate::streaming::worker_process::InitialSchedulingDetails;
-use futures::stream::{StreamExt, TryStreamExt};
-use futures_util::FutureExt;
-use futures_util::stream::FuturesOrdered;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use arrow_array::RecordBatch;
 use datafusion::common::internal_datafusion_err;
 use datafusion::error::DataFusionError;
-use crate::streaming::state::file_system::PrefixedLocalFileSystemStorage;
-
-pub struct PythonResources {
-    processor_class: Py<PyAny>,
-    ray_get: Py<PyAny>,
-}
-
-impl PythonResources {
-    pub fn new(processor_class: PyObject, ray_get: PyObject) -> PyResult<Self> {
-        Python::with_gil(|py| {
-            Ok(Self {
-                processor_class: processor_class.bind(py).clone().unbind(),
-                ray_get: ray_get.bind(py).clone().unbind(),
-            })
-        })
-    }
-    
-    pub async fn with_python<F, R>(&self, f: F) -> PyResult<R>
-    where
-        F: FnOnce(&Bound<PyAny>, &Bound<PyAny>) -> PyResult<R> + Send + 'static,
-        R: Send + 'static,
-    {
-        let processor_class = Python::with_gil(|py| self.processor_class.clone_ref(py));
-        let ray_get = Python::with_gil(|py| self.ray_get.clone_ref(py));
-        
-        tokio::task::spawn_blocking(move || {
-            Python::with_gil(|py| {
-                let pc_bound = processor_class.bind(py);
-                let rg_bound = ray_get.bind(py);
-                f(&pc_bound, &rg_bound)
-            })
-        }).await.unwrap()
-    }
-}
-
-pub struct ComputeEnv {
-    python_resources: Arc<PythonResources>,
-}
-
-impl ComputeEnv {
-    pub fn new(python_resources: Arc<PythonResources>) -> Self {
-        ComputeEnv { python_resources }
-    }
-
-    pub async fn start_processor_and_run(
-        &self,
-        task_definition: TaskDefinition2,
-        initial_scheduling_details: InitialSchedulingDetails,
-    ) -> PyResult<RemoteProcessor> {
-        let processor = RemoteProcessor::start(self.python_resources.clone(), None).await?;
-        processor.update_plan(&task_definition, &initial_scheduling_details).await?;
-        Ok(processor)
-    }
-
-    pub async fn start_many_processors(
-        &self,
-        num_processors: usize,
-        remote_checkpoint_dir: Option<String>,
-    ) -> PyResult<Vec<RemoteProcessor>> {
-        RemoteProcessor::start_many(self.python_resources.clone(), num_processors, remote_checkpoint_dir).await
-    }
-}
+use futures::stream::{StreamExt, TryStreamExt};
+use futures::Stream;
+use futures_util::stream::FuturesOrdered;
+use pyo3::PyResult;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 pub struct StaticCoordinator {
-    compute_env: Arc<ComputeEnv>,
+    compute_runtime: Arc<ComputeRuntime>,
 }
 
 impl StaticCoordinator {
-    pub fn new(compute_env: Arc<ComputeEnv>) -> Self {
-        Self { compute_env }
+    pub fn new(compute_runtime: Arc<ComputeRuntime>) -> Self {
+        Self { compute_runtime }
     }
 
     pub async fn schedule_together<'a>(
         &'_ self,
-        tasks: &'a [TaskDefinition2],
+        tasks: &'a [TaskDefinition],
         remote_checkpoint_dir: Option<String>,
-    ) -> PyResult<Vec<(&'a TaskDefinition2, String, RemoteProcessor)>> {
-        let processors = self.compute_env.start_many_processors(tasks.len(), remote_checkpoint_dir).await?;
+    ) -> PyResult<Vec<(&'a TaskDefinition, String, RemoteProcessor)>> {
+        let processors = self.compute_runtime.start_many_processors(tasks.len(), remote_checkpoint_dir).await?;
         println!("Processors started: {}", processors.len());
 
         let assigned_tasks = tasks.into_iter()
@@ -117,23 +58,23 @@ impl StaticCoordinator {
 }
 
 pub struct ActiveCoordinator {
-    compute_env: Arc<ComputeEnv>,
+    compute_runtime: Arc<ComputeRuntime>,
     remote_checkpoint_storage: Arc<FileSystemStateStorage>,
     remote_checkpoint_dir: String,
-    tasks: Vec<(TaskDefinition2, Vec<(String, RemoteProcessor, PartitionRange)>)>,
+    tasks: Vec<(TaskDefinition, Vec<(String, RemoteProcessor, PartitionRange)>)>,
 }
 
 impl ActiveCoordinator {
     pub async fn start_single_copies(
-        compute_env: Arc<ComputeEnv>,
-        tasks: Vec<TaskDefinition2>,
+        compute_runtime: Arc<ComputeRuntime>,
+        tasks: Vec<TaskDefinition>,
         remote_checkpoint_dir: String,
     ) -> PyResult<Self> {
         let remote_checkpoint_storage = Arc::new(FileSystemStateStorage::new(
             Arc::new(PrefixedLocalFileSystemStorage::new(remote_checkpoint_dir.clone())),
             "state", // Matches a fixed prefix in the worker process constructor
         ));
-        let processors = compute_env.start_many_processors(tasks.len(), Some(remote_checkpoint_dir.clone())).await?;
+        let processors = compute_runtime.start_many_processors(tasks.len(), Some(remote_checkpoint_dir.clone())).await?;
 
         let assigned_tasks = tasks.iter()
             .zip(processors.iter().map(|processor| processor.addr().to_string()))
@@ -147,7 +88,7 @@ impl ActiveCoordinator {
         }
 
         Ok(Self {
-            compute_env,
+            compute_runtime,
             remote_checkpoint_storage,
             remote_checkpoint_dir,
             tasks: assigned_tasks.into_iter()
@@ -219,7 +160,7 @@ impl ActiveCoordinator {
             .try_collect::<Vec<_>>()
             .await?;
 
-        let processors = self.compute_env.start_many_processors(new_number, Some(self.remote_checkpoint_dir.clone())).await?;
+        let processors = self.compute_runtime.start_many_processors(new_number, Some(self.remote_checkpoint_dir.clone())).await?;
         let assigned_tasks = partitions.into_iter()
             .zip(processors.into_iter())
             .map(|((partition, checkpoint), processor)| {
@@ -235,9 +176,9 @@ impl ActiveCoordinator {
                 task.exchange_outputs()
                     .iter()
                     .map(|stream_id| {
-                        GenerationInputDetail {
+                        RemoteStreamDetails {
                             stream_id: stream_id.clone(),
-                            locations: copies.iter().map(|(addr, _, partition_range)| GenerationInputLocation {
+                            locations: copies.iter().map(|(addr, _, partition_range)| RemoteStreamLocation {
                                 address: addr.clone(),
                                 offset_range: (0, 2 << 31),
                                 partitions: partition_range.clone(),
@@ -313,5 +254,103 @@ impl Drop for CoordinatorLogger {
         if let Some(handle) = self.background_handle.take() {
             handle.abort();
         }
+    }
+}
+
+pub async fn stream_results(address: &str, stream_id: &str) -> Result<impl Stream<Item=Result<RecordBatch, DataFusionError>> + use<>, DataFusionError> {
+    let stream = retry_future(5, || {
+        create_remote_stream_no_runtime(
+            &stream_id,
+            &address,
+            PartitionRange::empty(),
+        )
+    }).await?;
+    let stream = Box::into_pin(stream);
+    let stream = stream.map(|result| {
+        // Use a match statement to print each value of result
+        match result {
+            Ok(SItem::RecordBatch(record_batch)) => {
+                println!("Collect (py utils) Received record batch: {:?}", record_batch);
+                Ok(SItem::RecordBatch(record_batch))
+            },
+            Ok(SItem::Marker(marker)) => {
+                println!("Collect (py utils) Received marker: {}", marker.checkpoint_number);
+                Ok(SItem::Marker(marker))
+            },
+            Ok(SItem::Generation(usize)) => {
+                println!("Collect (py utils) Received generation item");
+                Ok(SItem::Generation(usize))
+            },
+            Err(err) => {
+                println!("Collect (py utils) Error in stream: {}", err);
+                Err(err)
+            },
+        }
+    });
+
+    let results = stream
+        .filter_map(|item| async move {
+            match item {
+                Err(e) => Some(Err(e)),
+                Ok(SItem::RecordBatch(record_batch)) => Some(Ok(record_batch)),
+                _ => None,
+            }
+        });
+    Ok(results)
+}
+
+pub fn schedule_without_partitions_inner(assigned_tasks: &[(&TaskDefinition, String)]) -> InitialSchedulingDetails {
+    let initial_generation = GenerationSpec {
+        id: "initial_generation".to_string(),
+        partitions: PartitionRange::empty(),
+        start_conditions: vec![],
+    };
+    let input_details = assigned_tasks.iter()
+        .flat_map(|(task, address)| {
+            task.exchange_outputs()
+                .into_iter()
+                .map(|stream_id| {
+                    RemoteStreamDetails {
+                        stream_id,
+                        locations: vec![RemoteStreamLocation {
+                            address: address.clone(),
+                            offset_range: (0, 2 << 31),
+                            partitions: PartitionRange::empty(),
+                        }],
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    InitialSchedulingDetails {
+        input_locations: input_details,
+        generations: vec![initial_generation],
+    }
+}
+
+pub fn schedule_with_constant_partitions(assigned_tasks: &[(&TaskDefinition, String)], partition: PartitionRange) -> InitialSchedulingDetails {
+    let initial_generation = GenerationSpec {
+        id: "initial_generation".to_string(),
+        partitions: partition.clone(),
+        start_conditions: vec![],
+    };
+    let input_details = assigned_tasks.iter()
+        .flat_map(|(task, address)| {
+            task.exchange_outputs()
+                .into_iter()
+                .map(|stream_id| {
+                    RemoteStreamDetails {
+                        stream_id,
+                        locations: vec![RemoteStreamLocation {
+                            address: address.clone(),
+                            offset_range: (0, 2 << 31),
+                            partitions: partition.clone(),
+                        }],
+                    }
+                })
+        })
+        .collect::<Vec<_>>();
+    InitialSchedulingDetails {
+        input_locations: input_details,
+        generations: vec![initial_generation],
     }
 }

@@ -1,4 +1,4 @@
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
+use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec};
 use crate::streaming::operators::remote_source::utils::{find_current_generation, get_addresses};
 use datafusion::common::{internal_datafusion_err, DataFusionError};
 use eyeball::{AsyncLock, SharedObservable};
@@ -21,7 +21,7 @@ struct SyncState {
 
 pub struct SharedFiberState<'a> {
     stream_ids: &'a [String],
-    scheduling_details_state: &'a SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+    scheduling_details_state: &'a SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
     current_generation_id: String,
     current_partitions: PartitionRange,
     current_addresses: Vec<(String, String, PartitionRange)>,
@@ -36,7 +36,7 @@ impl <'a> SharedFiberState<'a> {
     pub fn new(
         last_completed_marker: Arc<std::sync::Mutex<usize>>,
         stream_ids: &'a [String],
-        scheduling_details_state: &'a SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details_state: &'a SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         current_generation_id: String,
         current_partitions: PartitionRange,
         current_addresses: Vec<(String, String, PartitionRange)>,
@@ -116,7 +116,7 @@ impl <'a> SharedFiberState<'a> {
     }
 
     async fn check_generation_and_addresses(
-        scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         stream_ids: Vec<String>,
         current_generation_id: String,
         current_addresses: Vec<(String, String, PartitionRange)>,

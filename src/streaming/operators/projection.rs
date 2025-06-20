@@ -1,5 +1,5 @@
 use crate::proto::generated::streaming_tasks as proto;
-use crate::streaming::action_stream::StreamItem;
+use crate::streaming::model::stream_item::StreamItem;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::{internal_datafusion_err, DataFusionError};
@@ -8,8 +8,7 @@ use datafusion::physical_plan::streaming_operators::projection::ProjectionStream
 use datafusion::prelude::SessionContext;
 use std::sync::Arc;
 use async_trait::async_trait;
-use crate::streaming::operators::serialization::{ProtoSerializer, P};
-use crate::streaming::operators::task_function::{OutputChannel, OutputChannelL, TaskFunction, TaskState};
+use crate::streaming::serialisation::proto_context_serialization::{ProtoSerializer, P};
 
 #[derive(Clone)]
 pub struct ProjectionExpression {
@@ -90,47 +89,3 @@ impl ProjectionTask {
         }
     }
 }
-
-#[async_trait]
-impl TaskFunction for ProjectionTask {
-    async fn init(&mut self) {}
-
-    async fn poll(&mut self, _output: &mut OutputChannelL) -> TaskState {
-        unimplemented!()
-    }
-
-    async fn process(&mut self, data: RecordBatch, _input_channel: usize, output: &mut OutputChannel) -> TaskState {
-        output(StreamItem::RecordBatch(self.inner.process_batch(&data).unwrap())).await;
-        TaskState::Continue
-    }
-
-    async fn finish(&mut self, _output: &mut OutputChannel) {}
-
-    async fn get_state(&mut self) -> RecordBatch {
-        RecordBatch::new_empty(Arc::new(Schema::empty()))
-    }
-
-    async fn load_state(&mut self, _state: RecordBatch) {}
-}
-
-// impl TryFromProto<ProjectionTaskSpec> for ProjectionTask {
-//     type Error = DataFusionError;
-//
-//     fn try_from_proto(session_context: &SessionContext, proto: ProjectionTaskSpec) -> Result<Self, Self::Error> {
-//         let input_schema = proto.input_schema.ok_or(internal_datafusion_err!("Schema is required for ProjectionTask"))?;
-//         let schema_ref: SchemaRef = input_schema.try_into()?;
-//         let expressions = proto.expressions.into_iter()
-//             .map(|expr| {
-//                 let physical_expr = parse_physical_expr(
-//                     &expr.expression.ok_or(internal_datafusion_err!("Expression is required for ProjectionTask"))?,
-//                     session_context,
-//                     schema_ref.as_ref(),
-//                     &RayCodec {},
-//                 )?;
-//                 Ok((physical_expr, expr.alias))
-//             })
-//             .collect::<Result<Vec<_>, _>>()?;
-//
-//         Ok(Self::new(expressions, schema_ref))
-//     }
-// }

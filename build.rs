@@ -31,7 +31,6 @@ fn main() -> Result<(), String> {
     // Input file relative to in_dir, output file relative to out_dir, destination file relative to destination_dir
     let proto_files = [
         ("datafusion_ray.proto", "datafusion_ray.protobuf.rs", "protobuf.rs"),
-        ("streaming_tasks.proto", "datafusion_ray.protobuf.streaming_tasks.rs", "streaming_tasks.rs"),
         ("streaming.proto", "datafusion_ray.protobuf.streaming.rs", "streaming.rs"),
     ];
 

@@ -26,7 +26,7 @@ use futures_util::FutureExt;
 use itertools::Itertools;
 use pyo3::prelude::*;
 
-use crate::streaming::task_definition_2::TaskDefinition2;
+use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::worker_process::{InitialSchedulingDetails, WorkerProcess};
 use crate::util::ResultExt;
 use parking_lot::Mutex;
@@ -87,7 +87,7 @@ impl WorkerProcessState {
     }
 }
 
-// Python interface for each ray process
+// Rust interface used by python to start tasks
 #[pyclass]
 pub struct DFRayStreamingProcessorService {
     worker_process: WorkerProcessState,
@@ -170,7 +170,7 @@ impl DFRayStreamingProcessorService {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyException, _>(
                 format!("Failed to parse task bytes: {e}"),
             ))?;
-        let task_definition = TaskDefinition2::deserialize(reader)
+        let task_definition = TaskDefinition::deserialize(reader)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyException, _>(
                 format!("Failed to deserialize task definition: {e}"),
             ))?;
@@ -206,7 +206,7 @@ impl DFRayStreamingProcessorService {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyException, _>(
                 format!("Failed to parse task bytes: {e}"),
             ))?;
-        let task_definition = TaskDefinition2::deserialize(reader)
+        let task_definition = TaskDefinition::deserialize(reader)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyException, _>(
                 format!("Failed to deserialize task definition: {e}"),
             ))?;

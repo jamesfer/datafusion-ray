@@ -1,25 +1,27 @@
 use std::borrow::Cow;
-use crate::streaming::coordinator::PythonResources;
-use crate::streaming::task_definition_2::TaskDefinition2;
+use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::worker_process::InitialSchedulingDetails;
+use crate::streaming::serialisation::flexbuffers_serialisation::SerialiseToFlexbuffers;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
 use std::sync::Arc;
+use crate::python::datafusion_error_to_python::{DataFusionErrorToPython, DataFusionResultToPython};
+use crate::python::python_resources::PythonResources;
 
-// The rust version of the python Processor class
+// A rust wrapper of a python ray actor class. Makes it easier to call python methods.
 pub struct RemoteProcessor {
     processor_object: Arc<Py<PyAny>>,
-    python_pool: Arc<PythonResources>,
+    python_resources: Arc<PythonResources>,
     addr: String,
 }
 
 impl RemoteProcessor {
     pub async fn start(
-        python_pool: Arc<PythonResources>,
+        python_resources: Arc<PythonResources>,
         remote_checkpoint_dir: Option<String>,
     ) -> PyResult<Self> {
-        let pool = python_pool.clone();
-        let (processor_object, addr) = pool.with_python(|processor_class, ray_get| {
+        let resources = python_resources.clone();
+        let (processor_object, addr) = resources.with_python(|processor_class, ray_get| {
             let processor_object = Self::init_remote(processor_class, remote_checkpoint_dir)?;
             let addr = ray_get.call1((Self::start_up_remote(&processor_object)?, ))?
                 .extract::<String>()?;
@@ -29,7 +31,7 @@ impl RemoteProcessor {
 
         Ok(RemoteProcessor {
             processor_object: Arc::new(processor_object),
-            python_pool,
+            python_resources,
             addr,
         })
     }
@@ -85,7 +87,7 @@ impl RemoteProcessor {
     ) -> Self {
         RemoteProcessor {
             processor_object: Arc::new(processor_object),
-            python_pool,
+            python_resources: python_pool,
             addr,
         }
     }
@@ -102,22 +104,14 @@ impl RemoteProcessor {
 
     pub async fn update_plan(
         &self,
-        task_definition2: &TaskDefinition2,
+        task_definition2: &TaskDefinition,
         initial_scheduling_details: &InitialSchedulingDetails,
     ) -> PyResult<()> {
-        let task_bytes = task_definition2.to_bytes()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!(
-                "Failed to serialize TaskDefinition2: {}",
-                e
-            )))?;
-        let detail_bytes = initial_scheduling_details.to_bytes()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!(
-                "Failed to serialize InitialSchedulingDetails: {}",
-                e
-            )))?;
+        let task_bytes = task_definition2.to_flexbuffers_bytes().to_python_result()?;
+        let detail_bytes = initial_scheduling_details.to_flexbuffers_bytes().to_python_result()?;
 
         let processor_object = self.processor_object.clone();
-        self.python_pool.with_python(move |_processor_class, _ray_get| {
+        self.python_resources.with_python(move |_processor_class, _ray_get| {
             let task_bytes_cow: Cow<[u8]> = Cow::Owned(task_bytes);
             let detail_bytes_cow: Cow<[u8]> = Cow::Owned(detail_bytes);
             Python::with_gil(|py| {
@@ -132,23 +126,15 @@ impl RemoteProcessor {
 
     pub async fn update_plan_with_checkpoint(
         &self,
-        task_definition2: &TaskDefinition2,
+        task_definition2: &TaskDefinition,
         initial_scheduling_details: &InitialSchedulingDetails,
         checkpoint: usize,
     ) -> PyResult<()> {
-        let task_bytes = task_definition2.to_bytes()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!(
-                "Failed to serialize TaskDefinition2: {}",
-                e
-            )))?;
-        let detail_bytes = initial_scheduling_details.to_bytes()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!(
-                "Failed to serialize InitialSchedulingDetails: {}",
-                e
-            )))?;
+        let task_bytes = task_definition2.to_flexbuffers_bytes().to_python_result()?;
+        let detail_bytes = initial_scheduling_details.to_flexbuffers_bytes().to_python_result()?;
 
         let processor_object = self.processor_object.clone();
-        self.python_pool.with_python(move |_processor_class, _ray_get| {
+        self.python_resources.with_python(move |_processor_class, _ray_get| {
             let task_bytes_cow: Cow<[u8]> = Cow::Owned(task_bytes);
             let detail_bytes_cow: Cow<[u8]> = Cow::Owned(detail_bytes);
             Python::with_gil(|py| {

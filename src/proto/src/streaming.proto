@@ -18,7 +18,3 @@ message PartitionRange {
     uint64 end = 2;
     uint64 partitions = 3;
 }
-
-message Marker {
-  uint64 checkpoint_number = 1;
-}

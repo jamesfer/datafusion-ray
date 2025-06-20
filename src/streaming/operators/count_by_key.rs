@@ -1,7 +1,5 @@
-use crate::streaming::action_stream::Marker;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
-use crate::streaming::operators::utils::fiber_stream::{FiberStream, SingleFiberStream};
+use crate::streaming::model::stream_item::Marker;
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
 use crate::streaming::state::state::RocksDBStateBackend;
@@ -18,6 +16,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use arrow_array::RecordBatch;
 use tokio::sync::Mutex;
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CountByKeyOperator {
@@ -92,7 +93,7 @@ impl OperatorFunction2 for CountByKeyFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         state_id: &str,
     ) -> Result<(), DataFusionError> {
         let (generation, _) = scheduling_details.get().await;

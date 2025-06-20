@@ -1,11 +1,10 @@
-use crate::streaming::action_stream::Marker;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
+use crate::streaming::model::stream_item::Marker;
+use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec};
 use crate::streaming::operators::remote_source::shared_fibre_state::{FiberState, SharedFiberState};
 use crate::streaming::operators::remote_source::utils::{find_current_generation, get_addresses};
-use crate::streaming::operators::task_function::SItem;
-use crate::streaming::operators::utils::fiber_stream::FiberStream;
-use crate::streaming::runtime::Runtime;
-use crate::streaming::utils::create_remote_stream;
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::utils::fiber_stream::FiberStream;
+use crate::streaming::runtime::{create_remote_stream, Runtime};
 use crate::streaming::utils::retry::retry_future;
 use async_trait::async_trait;
 use datafusion::common::{internal_datafusion_err, DataFusionError};
@@ -16,12 +15,13 @@ use futures_util::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use create_remote_stream::create_remote_stream;
 use crate::streaming::partitioning::PartitionRange;
 
 pub struct RunningStream {
     runtime: Arc<Runtime>,
     stream_ids: Vec<String>,
-    scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+    scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
     current_marker: Arc<std::sync::Mutex<usize>>,
     existing_fibers: Option<HashMap<(String, String), RunningFiber>>,
     current_generation: Option<GenerationSpec>,
@@ -32,7 +32,7 @@ impl RunningStream {
     pub fn new(
         runtime: Arc<Runtime>,
         stream_ids: Vec<String>,
-        scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         current_marker: usize,
     ) -> Self {
         Self {
@@ -200,7 +200,7 @@ impl RunningFiber {
     {
         let current_partitions = self.current_partitions.clone();
         let remote_stream = if self.remote_stream.is_none() {
-            let stream = retry_future(10, || create_remote_stream::create_remote_stream(
+            let stream = retry_future(10, || create_remote_stream(
                 &self.runtime,
                 &self.stream_id,
                 &self.address,

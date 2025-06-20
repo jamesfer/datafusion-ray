@@ -1,7 +1,7 @@
-use crate::streaming::action_stream::Marker;
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
-use crate::streaming::operators::utils::fiber_stream::{FiberStream, SingleFiberStream};
+use crate::streaming::model::stream_item::Marker;
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
 use crate::streaming::state::state::RocksDBStateBackend;
@@ -12,6 +12,8 @@ use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::serialisation::state_serialisation::SerialiseToStateBytes;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CountStarOperator {}
@@ -46,12 +48,14 @@ impl CountStarFunction {
     }
 }
 
+const COUNT_STATE_KEY: &str = "count";
+
 #[async_trait]
 impl OperatorFunction2 for CountStarFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         state_id: &str,
     ) -> Result<(), DataFusionError> {
         let (generation, _) = scheduling_details.get().await;
@@ -84,14 +88,10 @@ impl OperatorFunction2 for CountStarFunction {
                 .clone()
                 .ok_or(internal_datafusion_err!("Current partition range not set"))?;
             state.move_to_checkpoint(checkpoint, partition_range).await?;
-            self.local_count = match state.get("count")? {
+
+            self.local_count = match state.get(COUNT_STATE_KEY)? {
                 None => 0,
-                Some(byte_vec) => {
-                    // Convert byte vector to u64
-                    let bytes: [u8; 8] = byte_vec.try_into()
-                        .map_err(|e| internal_datafusion_err!("State value for 'count' is not a valid u64: {:?}", e))?;
-                    u64::from_be_bytes(bytes)
-                }
+                Some(bytes) => u64::from_state_bytes(bytes)?,
             };
             println!("Loaded count from state: {}", self.local_count);
         }
@@ -149,7 +149,7 @@ impl OperatorFunction2 for CountStarFunction {
                         CountStreamAction::Marker { marker, local_count, partition_range } => {
                             // Store the count in the state backend
                             let mut state = state.lock().await;
-                            state.put("count", local_count.to_be_bytes())?;
+                            state.put("count", local_count.into_state_bytes()?)?;
                             state.checkpoint(marker.checkpoint_number as usize, partition_range).await?;
                             // Pass the marker downstream
                             Ok(Some(SItem::Marker(marker)))

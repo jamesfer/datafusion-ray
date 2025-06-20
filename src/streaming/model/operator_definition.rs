@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
 use crate::streaming::operators::count_by_key::CountByKeyOperator;
 use crate::streaming::operators::count_star::CountStarOperator;
 use crate::streaming::operators::identity::IdentityOperator;
@@ -6,7 +7,6 @@ use crate::streaming::operators::nested::NestedOperator;
 use crate::streaming::operators::remote_exchange::RemoteExchangeOperator;
 use crate::streaming::operators::remote_source::remote_source::RemoteSourceOperator;
 use crate::streaming::operators::source::SourceOperator;
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum OperatorSpec {

@@ -1,72 +1,14 @@
-use crate::streaming::action_stream::{Marker, OrdinalStreamResult, StreamItem};
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::utils::fiber_stream::FiberStream;
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::runtime::Runtime;
+use crate::streaming::utils::fiber_stream::FiberStream;
 use async_trait::async_trait;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
 use eyeball::{AsyncLock, SharedObservable};
 use futures::Stream;
 use std::fmt::Debug;
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-
-pub type OutputChannel = OutputChannelL<'static>;
-pub type OutputChannelL<'a> = Box<dyn (FnMut(StreamItem) -> Pin<Box<dyn Future<Output=()> + Sync + Send + 'a>>) + Sync + Send + 'a>;
-
-// TODO rename to operator function
-#[async_trait]
-pub trait TaskFunction {
-    async fn init(&mut self);
-    async fn poll(&mut self, output: &mut OutputChannelL) -> TaskState;
-    async fn process(&mut self, data: RecordBatch, input_channel: usize, output: &mut OutputChannel) -> TaskState;
-    // TODO should this consume self
-    async fn finish(&mut self, output: &mut OutputChannel);
-    async fn get_state(&mut self) -> RecordBatch;
-    async fn load_state(&mut self, state: RecordBatch);
-}
-
-#[derive(Debug, PartialEq)]
-pub enum TaskState {
-    Continue,
-    Exhausted,
-}
-
-#[async_trait]
-pub trait OperatorFunction {
-    async fn init(&mut self);
-    async fn process_streams<'a>(&'a mut self, input_streams: &'a mut [(usize, Vec<Pin<Box<dyn Stream<Item=RecordBatch> + 'a>>>)]) -> Pin<Box<dyn Stream<Item=OrdinalStreamResult> + 'a>>;
-    async fn process_stream<'a>(&'a mut self, input: Pin<Box<dyn Stream<Item=(usize, RecordBatch)> + 'a>>) -> Pin<Box<dyn Stream<Item=OrdinalStreamResult> + 'a>>;
-    // async fn process<'a>(&'a mut self, input: RecordBatch, ordinal: usize) -> Pin<Box<dyn Stream<Item=OrdinalStreamResult> + 'a>>;
-    async fn can_finish_phase_early(&mut self) -> bool;
-    // async fn finish_phase(&mut self, phase_index: usize) -> Pin<Box<dyn Stream<Item=OrdinalStreamResult>>>;
-    async fn increment_phase(&mut self, phase_index: usize);
-    // Finish is called when the operator is done processing all input streams, or it voluntarily
-    // says that it no longer needs any more input
-    async fn finish(&mut self);
-    // Cancel is called when the whole query cancels, or all downstream operators finished early
-    async fn cancel(&mut self);
-    async fn get_state(&mut self) -> RecordBatch;
-    async fn load_state(&mut self, state: RecordBatch);
-}
-
-
-#[derive(PartialEq, Debug)]
-pub enum SItem {
-    RecordBatch(RecordBatch),
-    Marker(Marker),
-    Generation(usize),
-}
-
-impl From<StreamItem> for SItem {
-    fn from(item: StreamItem) -> Self {
-        match item {
-            StreamItem::RecordBatch(batch) => SItem::RecordBatch(batch),
-            StreamItem::Marker(marker) => SItem::Marker(marker),
-        }
-    }
-}
+use crate::streaming::model::sitem::SItem;
 
 pub enum UpdateGenerationError {
     // A stream id or partition the operator is using didn't appear in the generation spec.
@@ -82,9 +24,9 @@ pub trait OperatorFunction2 {
     // TODO add state id here
     // Called strictly once before any other function 
     async fn init(
-        &mut self, 
+        &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         state_id: &str,
     ) -> Result<(), DataFusionError>;
     
@@ -147,9 +89,9 @@ pub trait OperatorFunction2 {
 #[async_trait]
 impl OperatorFunction2 for Box<dyn OperatorFunction2 + Sync + Send> {
     async fn init(
-        &mut self, 
+        &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         state_id: &str,
     ) -> Result<(), DataFusionError> {
         self.as_mut().init(runtime, scheduling_details, state_id).await

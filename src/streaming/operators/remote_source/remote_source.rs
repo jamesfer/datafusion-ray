@@ -1,6 +1,4 @@
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
-use crate::streaming::operators::utils::fiber_stream::FiberStream;
+use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec};
 use crate::streaming::runtime::Runtime;
 use async_trait::async_trait;
 use datafusion::common::internal_datafusion_err;
@@ -8,7 +6,10 @@ use datafusion::error::DataFusionError;
 use eyeball::{AsyncLock, SharedObservable};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::sitem::SItem;
 use crate::streaming::operators::remote_source::fibres::RunningStream;
+use crate::streaming::utils::fiber_stream::FiberStream;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RemoteSourceOperator {
@@ -34,7 +35,7 @@ impl CreateOperatorFunction2 for RemoteSourceOperator {
 struct RemoteSourceOperatorFunction {
     stream_ids: Vec<String>,
     runtime: Option<Arc<Runtime>>,
-    scheduling_details_state: Option<SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>>,
+    scheduling_details_state: Option<SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>>,
     loaded_checkpoint: usize,
 }
 
@@ -54,7 +55,7 @@ impl OperatorFunction2 for RemoteSourceOperatorFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         _state_id: &str,
     ) -> Result<(), DataFusionError> {
         self.runtime = Some(runtime);

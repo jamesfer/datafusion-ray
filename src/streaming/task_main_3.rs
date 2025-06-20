@@ -1,6 +1,6 @@
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec, TaskSchedulingDetailsUpdate};
-use crate::streaming::operators::operator::OperatorDefinition;
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec, TaskSchedulingDetailsUpdate};
+use crate::streaming::model::operator_definition::OperatorDefinition;
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
 use crate::streaming::runtime::Runtime;
 use datafusion::common::internal_datafusion_err;
 use datafusion::error::DataFusionError;
@@ -27,7 +27,7 @@ impl Error for OutOfOrderGenerationsError {}
 
 struct RunningTaskState {
     generations: Vec<GenerationSpec>,
-    input_locations: Vec<GenerationInputDetail>,
+    input_locations: Vec<RemoteStreamDetails>,
 }
 
 pub struct RunningTask {
@@ -35,7 +35,7 @@ pub struct RunningTask {
     // function: Arc<dyn OperatorFunction2 + Sync + Send>,
     handle: JoinHandle<Result<(), DataFusionError>>,
     state: Arc<Mutex<RunningTaskState>>,
-    scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>
+    scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>
 }
 
 impl RunningTask {
@@ -44,7 +44,7 @@ impl RunningTask {
         operator: OperatorDefinition,
         runtime: Arc<Runtime>,
         initial_checkpoint: usize,
-        initial_input_locations: Vec<GenerationInputDetail>,
+        initial_input_locations: Vec<RemoteStreamDetails>,
         generations: Vec<GenerationSpec>,
     ) -> Result<Self, DataFusionError> {
         if operator.inputs.len() > 0 || operator.outputs.len() > 0 {
@@ -126,7 +126,7 @@ async fn operator_main_loop(
     runtime: Arc<Runtime>,
     initial_checkpoint: usize,
     state: Arc<Mutex<RunningTaskState>>,
-    scheduling_details_receiver: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>
+    scheduling_details_receiver: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>
 ) -> Result<(), DataFusionError> {
     // Initialisation
     println!("Starting task {}", task_id);

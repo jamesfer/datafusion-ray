@@ -20,9 +20,3 @@ pub struct PartitionRange {
     #[prost(uint64, tag = "3")]
     pub partitions: u64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Marker {
-    #[prost(uint64, tag = "1")]
-    pub checkpoint_number: u64,
-}

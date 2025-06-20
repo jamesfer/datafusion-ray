@@ -1,6 +1,6 @@
 use std::error::Error;
-use crate::streaming::action_stream::{Marker, StreamItem, StreamResult};
-use crate::streaming::processor::flight_data_encoder::{FlightDataEncoderBuilder, FlightDataItem};
+use std::ops::Deref;
+use crate::streaming::serialisation::flight_data_encoder::{FlightDataEncoderBuilder, FlightDataItem};
 use arrow::error::ArrowError;
 use arrow_flight::decode::{DecodedPayload, FlightRecordBatchStream};
 use arrow_flight::error::FlightError;
@@ -12,6 +12,8 @@ use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use tonic::Status;
+use crate::streaming::model::stream_item::{Marker, StreamItem, StreamResult};
+use crate::streaming::serialisation::flexbuffers_serialisation::{DeserialiseFromFlexbuffers, SerialiseToFlexbuffers};
 
 pub fn encode_stream_to_flight(
     stream: impl Stream<Item=Result<StreamItem, impl Error + Send + Sync + 'static>> + Send + 'static
@@ -23,7 +25,11 @@ pub fn encode_stream_to_flight(
         .map(|stream_result| {
             match stream_result {
                 Ok(StreamItem::RecordBatch(record_batch)) => Ok(FlightDataItem::RecordBatch(record_batch)),
-                Ok(StreamItem::Marker(marker)) => Ok(FlightDataItem::AppMetadata(Bytes::from(marker.to_bytes()))),
+                Ok(StreamItem::Marker(marker)) => {
+                    let marker_bytes = marker.to_flexbuffers_bytes()
+                        .map_err(|e| FlightError::Arrow(ArrowError::ExternalError(Box::new(e))))?;
+                    Ok(FlightDataItem::AppMetadata(Bytes::from(marker_bytes)))
+                },
                 Err(err) => Err(err),
             }
         });
@@ -54,8 +60,7 @@ pub fn decode_flight_to_stream(
                 DecodedPayload::Schema(_) => Ok(None),
                 DecodedPayload::None => {
                     // When the decoded payload is none, we check the app metadata for a marker
-                    Marker::from_bytes(decoded_flight_data.inner.app_metadata)
-                        .map_err(|decoding_error| internal_datafusion_err!("Error decoding marker: {}", decoding_error))
+                    Marker::from_flexbuffers_bytes(decoded_flight_data.inner.app_metadata.deref())
                         .map(|marker| Some(StreamItem::Marker(marker)))
                 },
             };

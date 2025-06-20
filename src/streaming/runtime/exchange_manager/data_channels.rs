@@ -1,4 +1,4 @@
-use crate::streaming::action_stream::StreamItem;
+use crate::streaming::model::stream_item::StreamItem;
 use crate::streaming::partitioning::{filter_by_partition_range, PartitionRange, PartitioningSpec};
 use crate::streaming::runtime::exchange_manager::once_notify::OnceNotify;
 use datafusion::common::{internal_datafusion_err, DataFusionError};
@@ -272,7 +272,7 @@ impl ExchangeChannelStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::streaming::action_stream::StreamItem;
+    use crate::streaming::model::stream_item::StreamItem;
     use crate::streaming::partitioning::PartitionRange;
     use crate::streaming::runtime::exchange_manager::data_channels::ExchangeChannelStore;
     use datafusion::common::record_batch;

@@ -17,11 +17,12 @@ use futures_util::TryFutureExt;
 use prost::Message;
 use crate::flight::{DoGetStream, FlightHandler, FlightServ};
 use crate::proto::generated::streaming::StreamingFlightTicketData;
-use crate::streaming::action_stream::StreamItem;
+use crate::streaming::model::stream_item::StreamItem;
 use crate::streaming::partitioning::PartitionRange;
-use crate::streaming::processor::stream_serialization::encode_stream_to_flight;
+use crate::streaming::serialisation::flight_stream_serialization::encode_stream_to_flight;
 use crate::streaming::runtime::DataChannelSender;
 use crate::streaming::runtime::exchange_manager::data_channels::{ChannelPartitioningDetails, ExchangeChannelStore};
+use crate::streaming::serialisation::proto_serialisation::SerialiseToProto;
 
 pub struct DataExchangeManager {
     listening_address: String,
@@ -125,7 +126,7 @@ impl FlightHandler for DataExchangeFlightService {
         let request_checkpoint = 123usize;
         let request_stream_id = ticket.stream_id;
         let request_partitions = ticket.partitions
-            .map(|partitions| partitions.into())
+            .map(PartitionRange::from_proto)
             .unwrap_or(PartitionRange::empty());
 
         let data_stream = self.exchange_channel_store.stream(&request_stream_id, &request_partitions).await

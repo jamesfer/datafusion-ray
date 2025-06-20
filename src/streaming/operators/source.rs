@@ -1,16 +1,16 @@
-use crate::streaming::generation::{GenerationInputDetail, GenerationSpec};
-use crate::streaming::operators::task_function::{CreateOperatorFunction2, OperatorFunction2, SItem};
-use crate::streaming::operators::utils::fiber_stream::{FiberStream, SingleFiberStream};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
+use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use crate::streaming::runtime::Runtime;
 use arrow::array::{Array, RecordBatch};
 use async_trait::async_trait;
 use datafusion::common::{internal_datafusion_err, DataFusionError};
 use eyeball::{AsyncLock, SharedObservable};
-use futures::stream::iter;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use futures::StreamExt;
-use crate::streaming::action_stream::{Marker, StreamItem};
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::model::stream_item::{Marker, StreamItem};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SourceOperator {
@@ -72,7 +72,7 @@ impl OperatorFunction2 for SourceOperatorFunction {
     async fn init(
         &mut self,
         _runtime: Arc<Runtime>,
-        _scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<GenerationInputDetail>>), AsyncLock>,
+        _scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         _state_id: &str,
     ) -> Result<(), DataFusionError> {
         Ok(())

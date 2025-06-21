@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeTuple;
 use tokio::sync::Mutex;
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::model::sitem::SItem;
 use crate::streaming::partitioning::PartitioningSpec;
 use crate::streaming::runtime::exchange_manager::data_channels::ChannelPartitioningDetails;
@@ -286,8 +286,8 @@ impl RemoteExchangeOperator {
     }
 }
 
-impl CreateOperatorFunction2 for RemoteExchangeOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for RemoteExchangeOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(RemoteExchangeOperatorFunction::new(self.output_stream_id.clone(), self.partitioning.clone()))
     }
 }
@@ -317,7 +317,7 @@ impl RemoteExchangeOperatorFunction {
 }
 
 #[async_trait]
-impl OperatorFunction2 for RemoteExchangeOperatorFunction {
+impl OperatorFunction for RemoteExchangeOperatorFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,

@@ -1,6 +1,6 @@
 use crate::streaming::model::stream_item::Marker;
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
@@ -24,8 +24,8 @@ impl CountStarOperator {
     }
 }
 
-impl CreateOperatorFunction2 for CountStarOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for CountStarOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(CountStarFunction::new())
     }
 }
@@ -51,7 +51,7 @@ impl CountStarFunction {
 const COUNT_STATE_KEY: &str = "count";
 
 #[async_trait]
-impl OperatorFunction2 for CountStarFunction {
+impl OperatorFunction for CountStarFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,

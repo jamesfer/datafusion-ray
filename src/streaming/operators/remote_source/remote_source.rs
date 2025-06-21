@@ -6,7 +6,7 @@ use datafusion::error::DataFusionError;
 use eyeball::{AsyncLock, SharedObservable};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::model::sitem::SItem;
 use crate::streaming::operators::remote_source::fibres::RunningStream;
 use crate::streaming::utils::fiber_stream::FiberStream;
@@ -26,8 +26,8 @@ impl RemoteSourceOperator {
     }
 }
 
-impl CreateOperatorFunction2 for RemoteSourceOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for RemoteSourceOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(RemoteSourceOperatorFunction::new(self.stream_ids.clone()))
     }
 }
@@ -51,7 +51,7 @@ impl RemoteSourceOperatorFunction {
 }
 
 #[async_trait]
-impl OperatorFunction2 for RemoteSourceOperatorFunction {
+impl OperatorFunction for RemoteSourceOperatorFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,

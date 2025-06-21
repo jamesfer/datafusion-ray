@@ -1,6 +1,6 @@
 use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec, TaskSchedulingDetailsUpdate};
 use crate::streaming::model::operator_definition::OperatorDefinition;
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::runtime::Runtime;
 use datafusion::common::internal_datafusion_err;
 use datafusion::error::DataFusionError;
@@ -121,7 +121,7 @@ impl RunningTask {
 
 async fn operator_main_loop(
     task_id: String,
-    mut function: Box<dyn OperatorFunction2 + Sync + Send>,
+    mut function: Box<dyn OperatorFunction + Sync + Send>,
     state_id: &str,
     runtime: Arc<Runtime>,
     initial_checkpoint: usize,
@@ -174,7 +174,7 @@ async fn operator_main_loop(
 
 async fn handle_out_of_order_error(
     generations: &[GenerationSpec],
-    function: &(dyn OperatorFunction2 + Sync + Send),
+    function: &(dyn OperatorFunction + Sync + Send),
     out_of_order_error: &OutOfOrderGenerationsError,
 ) -> usize {
     // let generation_id = out_of_order_error.generation_id.as_str();

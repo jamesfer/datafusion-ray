@@ -1,5 +1,5 @@
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::operators::utils::example_ref_storage::Store;
 use crate::streaming::utils::fiber_stream::FiberStream;
 use crate::streaming::runtime::Runtime;
@@ -42,8 +42,8 @@ impl NestedOperator {
     }
 }
 
-impl CreateOperatorFunction2 for NestedOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for NestedOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(NestedOperatorFunction {
             input_stream_ids: self.inputs.clone(),
             operator_functions: self.operators.iter()
@@ -59,12 +59,12 @@ impl CreateOperatorFunction2 for NestedOperator {
 
 struct NestedOperatorFunction {
     input_stream_ids: Vec<(usize, String)>,
-    operator_functions: Vec<(OperatorDefinition, Box<dyn OperatorFunction2 + Sync + Send>)>,
+    operator_functions: Vec<(OperatorDefinition, Box<dyn OperatorFunction + Sync + Send>)>,
     output_stream_ids: Vec<(usize, String)>,
 }
 
 #[async_trait]
-impl OperatorFunction2 for NestedOperatorFunction {
+impl OperatorFunction for NestedOperatorFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
@@ -114,7 +114,7 @@ impl OperatorFunction2 for NestedOperatorFunction {
 async fn run_all_operators<'a>(
     external_input_streams: Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>,
     input_stream_ids: &[(usize, String)],
-    operators: &'a mut [(OperatorDefinition, Box<dyn OperatorFunction2 + Sync + Send>)],
+    operators: &'a mut [(OperatorDefinition, Box<dyn OperatorFunction + Sync + Send>)],
     output_stream_ids: &[(usize, String)]
 ) -> Result<Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>, DataFusionError> {
     let channels = Arc::new(Store::<Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>>::new());
@@ -157,7 +157,7 @@ async fn run_all_operators<'a>(
 
 async fn run_operator<'a, 'b>(
     operator_definition: &OperatorDefinition,
-    operator_function: &'a mut (dyn OperatorFunction2 + Sync + Send),
+    operator_function: &'a mut (dyn OperatorFunction + Sync + Send),
     channels: &'b Store<Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>>,
 ) -> Result<(), DataFusionError>
 where 'a : 'b // a must live longer than b
@@ -183,7 +183,7 @@ where 'a : 'b // a must live longer than b
 
 async fn temp<'a, 'b>(
     operator_definition: &OperatorDefinition,
-    operator_function: &'a mut (dyn OperatorFunction2 + Sync + Send),
+    operator_function: &'a mut (dyn OperatorFunction + Sync + Send),
     channels: &'b Store<Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>>,
     input_streams: Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>,
 ) -> Result<(), DataFusionError>

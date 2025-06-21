@@ -1,7 +1,7 @@
 use crate::proto::generated::streaming_tasks as proto;
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::serialisation::proto_context_serialization::ProtoSerializer;
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::utils::fiber_stream::FiberStream;
 use crate::streaming::runtime::Runtime;
 use async_trait::async_trait;
@@ -20,8 +20,8 @@ impl IdentityOperator {
     }
 }
 
-impl CreateOperatorFunction2 for IdentityOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for IdentityOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(IdentityOperatorFunction)
     }
 }
@@ -45,7 +45,7 @@ pub struct IdentityTask;
 struct IdentityOperatorFunction;
 
 #[async_trait]
-impl OperatorFunction2 for IdentityOperatorFunction {
+impl OperatorFunction for IdentityOperatorFunction {
     async fn init(
         &mut self,
         _runtime: Arc<Runtime>,

@@ -1,5 +1,5 @@
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use crate::streaming::runtime::Runtime;
 use arrow::array::{Array, RecordBatch};
@@ -41,8 +41,8 @@ impl SourceOperator {
     }
 }
 
-impl CreateOperatorFunction2 for SourceOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for SourceOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(SourceOperatorFunction::new(self.items.clone(), self.num_iterations, self.delay_between_iterations))
     }
 }
@@ -68,7 +68,7 @@ impl SourceOperatorFunction {
 }
 
 #[async_trait]
-impl OperatorFunction2 for SourceOperatorFunction {
+impl OperatorFunction for SourceOperatorFunction {
     async fn init(
         &mut self,
         _runtime: Arc<Runtime>,

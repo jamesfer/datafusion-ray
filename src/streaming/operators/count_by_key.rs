@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use arrow_array::RecordBatch;
 use tokio::sync::Mutex;
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::model::sitem::SItem;
 use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 
@@ -31,8 +31,8 @@ impl CountByKeyOperator {
     }
 }
 
-impl CreateOperatorFunction2 for CountByKeyOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for CountByKeyOperator {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(CountByKeyFunction::new(self.key_col.clone()))
     }
 }
@@ -89,7 +89,7 @@ impl CountByKeyFunction {
 }
 
 #[async_trait]
-impl OperatorFunction2 for CountByKeyFunction {
+impl OperatorFunction for CountByKeyFunction {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,

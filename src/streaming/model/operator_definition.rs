@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::streaming::model::operator_function::{CreateOperatorFunction2, OperatorFunction2};
+use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::operators::count_by_key::CountByKeyOperator;
 use crate::streaming::operators::count_star::CountStarOperator;
 use crate::streaming::operators::identity::IdentityOperator;
@@ -19,8 +19,8 @@ pub enum OperatorSpec {
     RemoteExchangeInput(RemoteSourceOperator),
 }
 
-impl CreateOperatorFunction2 for OperatorSpec {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
+impl CreateOperatorFunction for OperatorSpec {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
         match self {
             OperatorSpec::Identity(op) => op.create_operator_function(),
             OperatorSpec::Source(op) => op.create_operator_function(),

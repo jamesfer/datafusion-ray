@@ -19,27 +19,19 @@ pub enum UpdateGenerationError {
     IncompatibleStartOffsets,
 }
 
+pub trait CreateOperatorFunction {
+    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send>;
+}
+
 #[async_trait]
-pub trait OperatorFunction2 {
-    // TODO add state id here
-    // Called strictly once before any other function 
+pub trait OperatorFunction {
+    // Called strictly once before any other function
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
         scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
         state_id: &str,
     ) -> Result<(), DataFusionError>;
-    
-    // Called each time the generations or input details are updated. Is called before the operator
-    // starts running with the initial locations of the inputs and initial generations. It is also 
-    // often called while the operator is running.
-    // async fn update_scheduling_details(
-    //     &self, 
-    //     new_generations: Option<Vec<GenerationSpec>>, 
-    //     input_locations: Option<Vec<GenerationInputDetail>>,
-    // ) -> Result<(), UpdateGenerationError> {
-    //     Ok(())
-    // }
     
     // Called each time, the operator needs to jump to a checkpoint, including when the operator
     // first starts, even if the operator is starting from the beginning.
@@ -87,7 +79,7 @@ pub trait OperatorFunction2 {
 }
 
 #[async_trait]
-impl OperatorFunction2 for Box<dyn OperatorFunction2 + Sync + Send> {
+impl OperatorFunction for Box<dyn OperatorFunction + Sync + Send> {
     async fn init(
         &mut self,
         runtime: Arc<Runtime>,
@@ -117,13 +109,6 @@ impl OperatorFunction2 for Box<dyn OperatorFunction2 + Sync + Send> {
     }
 }
 
-pub trait CreateOperatorFunction2 {
-    // type OperatorFunctionType: OperatorFunction2 + Sync + Send;
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send>;
-    // fn create_boxed_operator_function(&self) -> Box<dyn OperatorFunction2 + Sync + Send> {
-    //     Box::new(self.create_operator_function())
-    // }
-}
 
 
 

@@ -34,6 +34,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
 use crate::streaming::state::file_system::PrefixedLocalFileSystemStorage;
+use object_store::local::LocalFileSystem;
 
 enum WorkerProcessState {
     // The future needs to be sync and send because it is used by pyclass structs, which need to be
@@ -106,7 +107,11 @@ impl DFRayStreamingProcessorService {
             None => Box::pin(WorkerProcess::start(name.clone()))
                 as Pin<Box<dyn Future<Output = Result<WorkerProcess, DataFusionError>> + Send + Sync>>,
             Some(url) => {
-                let remote_state_store = FileSystemStateStorage::new(Arc::new(PrefixedLocalFileSystemStorage::new(url)), "state");
+                let object_store = Arc::new(
+                    LocalFileSystem::new_with_prefix(&url)
+                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create LocalFileSystem: {}", e)))?
+                );
+                let remote_state_store = FileSystemStateStorage::new(object_store);
                 Box::pin(WorkerProcess::start_with_remote_file_system(name.clone(), Arc::new(remote_state_store)))
                     as Pin<Box<dyn Future<Output = Result<WorkerProcess, DataFusionError>> + Send + Sync>>
             },

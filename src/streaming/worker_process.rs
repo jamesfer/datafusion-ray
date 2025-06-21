@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
 use crate::streaming::state::file_system::{FileSystemStorage, TempdirFileSystemStorage};
+use object_store::local::LocalFileSystem;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InitialSchedulingDetails {
@@ -29,10 +30,13 @@ pub struct WorkerProcess {
 
 impl WorkerProcess {
     pub async fn start(name: String) -> Result<Self, DataFusionError> {
-        let remote_file_system = Arc::new(TempdirFileSystemStorage::from_tempdir(make_temp_dir(format!("{}-remote", name))?));
+        let temp_dir = tempfile::tempdir()?;
+        let remote_object_store = Arc::new(
+            LocalFileSystem::new_with_prefix(temp_dir.path())
+                .map_err(|e| internal_datafusion_err!("Failed to create LocalFileSystem: {}", e))?
+        );
         let remote_state_store = Arc::new(FileSystemStateStorage::new(
-            remote_file_system.clone(),
-            "state",
+            remote_object_store,
         ));
         Self::start_with_remote_file_system(
             name,
@@ -132,11 +136,9 @@ mod tests {
     use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails, RemoteStreamLocation};
     use crate::streaming::operators::count_star::CountStarOperator;
     use crate::streaming::operators::nested::NestedOperator;
-    use crate::streaming::operators::operator_definition::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
     use crate::streaming::operators::remote_exchange::RemoteExchangeOperator;
     use crate::streaming::operators::remote_source::remote_source::RemoteSourceOperator;
     use crate::streaming::operators::source::SourceOperator;
-    use crate::streaming::operators::operator_function::SItem;
     use crate::streaming::partitioning::{PartitionRange, PartitioningSpec};
     use crate::streaming::state::file_system::TempdirFileSystemStorage;
     use crate::streaming::model::task_definition::TaskDefinition;
@@ -149,6 +151,8 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
     use tokio::{join, try_join};
+    use crate::streaming::model::operator_definition::{OperatorDefinition, OperatorInput, OperatorOutput, OperatorSpec};
+    use crate::streaming::model::sitem::SItem;
     use crate::streaming::model::stream_item::{Marker, StreamItem};
     use crate::streaming::runtime::create_remote_stream::create_remote_stream_no_runtime;
     use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
@@ -890,10 +894,10 @@ mod tests {
 
     #[tokio::test]
     pub async fn restarting_with_remote_state() {
-        let remote_file_system = Arc::new(TempdirFileSystemStorage::from_tempdir(make_temp_dir("shared-remote").unwrap()));
+        let temp_dir = make_temp_dir("shared-remote").unwrap();
+        let remote_file_system = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap());
         let remote_state_store = Arc::new(FileSystemStateStorage::new(
             remote_file_system.clone(),
-            "state".to_string(),
         ));
         let worker1 = WorkerProcess::start_with_remote_file_system(format!("worker1-{}", uuid::Uuid::new_v4()), remote_state_store.clone()).await.unwrap();
         let worker2 = WorkerProcess::start_with_remote_file_system(format!("worker2-{}", uuid::Uuid::new_v4()), remote_state_store).await.unwrap();

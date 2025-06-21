@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
 use datafusion::common::{internal_datafusion_err, DataFusionError};
-use tokio_stream::wrappers::ReadDirStream;
-use std::ffi::OsString;
 use futures_util::{StreamExt, TryStreamExt};
+use object_store::ObjectStore;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use tokio_stream::wrappers::ReadDirStream;
 
 #[derive(Debug, Clone)]
 pub struct FileSystemEntry {
@@ -11,7 +12,6 @@ pub struct FileSystemEntry {
     pub directory: bool,
 }
 
-// TODO consider replacing with object_store::local::LocalFileSystem;
 #[async_trait]
 pub trait FileSystemStorage {
     async fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), DataFusionError>;

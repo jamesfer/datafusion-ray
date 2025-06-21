@@ -5,23 +5,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use futures::{StreamExt, TryStreamExt};
 use futures_util::TryFutureExt;
+use object_store::ObjectStore;
 use rocksdb::checkpoint::Checkpoint;
 use rocksdb::{IteratorMode, Options, SstFileWriter};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use datafusion::common::{internal_datafusion_err, DataFusionError};
 use crate::streaming::partitioning::PartitionRange;
-use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
+use crate::streaming::state::checkpoint_storage::{FileSystemStateStorage, ObjectStoreRef};
 use crate::streaming::state::file_system::FileSystemStorage;
 
 pub struct RocksDBStateBackend {
     state_id: String,
-    root_dir: OsString,
+    local_root_dir: OsString,
     partitions: PartitionRange,
     remote_checkpoint_storage: Arc<FileSystemStateStorage>,
     local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     working_dir: OsString,
-    // The DB is almost never None, but we sometimes need to drop it to create a new one
     open_db: rocksdb::DB,
     background_task: JoinHandle<()>,
     background_sync_channel: Sender<(String, PartitionRange, PathBuf)>,
@@ -61,7 +61,7 @@ impl RocksDBStateBackend {
 
         Ok(Self {
             state_id,
-            root_dir: root_dir.into_os_string(),
+            local_root_dir: root_dir.into_os_string(),
             partitions,
             remote_checkpoint_storage,
             local_file_system,
@@ -108,7 +108,8 @@ impl RocksDBStateBackend {
 
         // Creates a new directory, and writes the checkpoint to it. Rocksdb throws an error if the
         // directory already exists.
-        let checkpoint_dir = Self::create_checkpoint_directory_path(&self.root_dir, checkpoint_id);
+        let checkpoint_dir = Self::create_checkpoint_directory_path(&self.local_root_dir, checkpoint_id);
+        println!("Creating checkpoint directory at {} with {} entries", checkpoint_dir.display(), self.open_db.iterator(IteratorMode::Start).count());
         self.create_local_rocksdb_checkpoint(&checkpoint_dir)?;
 
         // Sends the checkpoint to the background task to persist it to the remote file system
@@ -125,29 +126,37 @@ impl RocksDBStateBackend {
     pub async fn move_to_checkpoint(&mut self, checkpoint: usize, partition_range: PartitionRange) -> Result<(), DataFusionError> {
         println!("Attempting to move to checkpoint {} with partition range {:?} (state id {})", checkpoint, partition_range, self.state_id);
         // Find the directory for the checkpoint with a fairly inefficient search
-        let (is_local, checkpoints) = self.find_checkpoint(checkpoint, partition_range).await?;
+        let checkpoints = self.find_checkpoint(checkpoint, partition_range).await?;
 
         // Copy the checkpoint into another working directory
-        if !is_local {
-            // If the checkpoints are remote, we need to download them first. This is also
-            // inefficient as we end up downloading the checkpoints before copying them into the
-            // working directory.
-            for (checkpoint_path, _partition_range) in &checkpoints {
-                Self::copy_dir_between_systems(
-                    self.remote_checkpoint_storage.storage().as_ref(),
-                    checkpoint_path,
-                    self.local_file_system.as_ref(),
-                    checkpoint_path,
-                ).await?;
-            }
+        // We need to download the checkpoints first. This is also inefficient as we end up
+        // downloading the checkpoints before copying them into the working directory.
+        let mut paths = Vec::with_capacity(checkpoints.len());
+        for (checkpoint_part_id, _partition_range) in checkpoints {
+            let remote_checkpoint_dir = self.remote_checkpoint_storage.get_checkpoint_file_system(&self.state_id, &checkpoint_part_id);
+            let remote_path = object_store::path::Path::default();
+            let destination_path = Self::create_checkpoint_directory_path(&self.local_root_dir, checkpoint);
+            Self::download_dir(
+                &remote_checkpoint_dir,
+                &remote_path,
+                self.local_file_system.as_ref(),
+                &destination_path,
+            ).await?;
+            paths.push(destination_path);
         }
+        let paths = paths;
+
+        println!("Found {} checkpoints to use. Paths {:?}", paths.len(), paths);
 
         // Now we need to merge all of the partial checkpoints into a single working directory.
-        let new_working_dir = Self::create_working_directory_path(&self.root_dir);
-        let new_db = if checkpoints.len() == 1 {
+        let new_working_dir = Self::create_working_directory_path(&self.local_root_dir);
+        let new_db = if paths.len() == 1 {
             // Fast path when there is only one checkpoint
-            self.local_file_system.copy(Path::new(&checkpoints[0].0), &new_working_dir).await?;
-            Self::open_rocksdb_database(self.local_file_system.as_ref(), &new_working_dir)?
+            println!("Copying single checkpoint from {} to {}", &paths[0].display(), new_working_dir.display());
+            self.local_file_system.copy(Path::new(&paths[0]), &new_working_dir).await?;
+            let new = Self::open_rocksdb_database(self.local_file_system.as_ref(), &new_working_dir)?;
+            println!("Opened new RocksDB database with {} entries", new.iterator(IteratorMode::Start).count());
+            new
         } else {
             // For each checkpoint, we need to open it, read all the keys that are in the partition
             // range, write out the SST file, then ingest it into the new database.
@@ -155,8 +164,8 @@ impl RocksDBStateBackend {
             let options = Options::default();
             let mut sst_writer = SstFileWriter::create(&options);
 
-            let mut paths = Vec::with_capacity(checkpoints.len());
-            for (checkpoint_path, partition_range) in &checkpoints {
+            let mut sst_paths = Vec::with_capacity(paths.len());
+            for checkpoint_path in &paths {
                 let sst_path = sst_dir.path().join(checkpoint_path);
                 fs::create_dir_all(&sst_path)?;
 
@@ -170,12 +179,12 @@ impl RocksDBStateBackend {
                 }
                 sst_writer.finish()
                     .map_err(|err| DataFusionError::External(Box::new(err)))?;
-                paths.push(sst_path);
+                sst_paths.push(sst_path);
             }
 
             // Ingest all the SST files into the new database
             let db = Self::open_rocksdb_database(self.local_file_system.as_ref(), &new_working_dir)?;
-            db.ingest_external_file(paths)
+            db.ingest_external_file(sst_paths)
                 .map_err(|err| DataFusionError::External(Box::new(err)))?;
 
             db
@@ -193,7 +202,7 @@ impl RocksDBStateBackend {
     async fn async_checkpoint_background_task(
         state_id: &str,
         mut checkpoints: tokio::sync::mpsc::Receiver<(String, PartitionRange, PathBuf)>,
-        local_file_system: impl AsRef<dyn FileSystemStorage + Send + Sync>,
+        local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
         remote_checkpoint_storage: &FileSystemStateStorage,
     ) {
         // Uploads checkpoints in the background to the remote file system
@@ -220,46 +229,46 @@ impl RocksDBStateBackend {
         remote_checkpoint_storage: &FileSystemStateStorage,
     ) -> Result<(), DataFusionError> {
         // Create a new checkpoint
-        let remote_checkpoint_path = remote_checkpoint_storage.start_checkpoint(state_id).await?;
+        let checkpoint_part_id = remote_checkpoint_storage.start_checkpoint_part(state_id).await?;
+        let checkpoint_part_file_system = remote_checkpoint_storage.get_checkpoint_file_system(state_id, &checkpoint_part_id);
 
         // Upload the checkpoint directory to the remote file system
-        Self::copy_dir_between_systems(
+        let destination_path = object_store::path::Path::default();
+        println!("Uploading checkpoint {} from {} to remote storage with remote id {}", checkpoint_id, checkpoint_path.display(), checkpoint_part_id);
+        Self::upload_dir(
             local_file_system,
             checkpoint_path,
-            remote_checkpoint_storage.storage().as_ref(),
-            &remote_checkpoint_path,
+            &checkpoint_part_file_system,
+            &destination_path,
         ).await?;
 
         // Finish the checkpoint on the remote file system
-        remote_checkpoint_storage.complete_checkpoint(state_id, checkpoint_id, &remote_checkpoint_path, partition_range).await?;
+        remote_checkpoint_storage.complete_checkpoint(state_id, checkpoint_id, checkpoint_part_id, partition_range).await?;
 
         Ok(())
     }
 
-    async fn copy_dir_between_systems(
+    async fn upload_dir(
         source_system: &(dyn FileSystemStorage + Send + Sync),
         source_dir: impl AsRef<Path>,
-        destination_system: &(dyn FileSystemStorage + Send + Sync),
-        dest_dir: impl AsRef<Path>,
+        destination_system: &ObjectStoreRef,
+        destination_dir: &object_store::path::Path,
     ) -> Result<(), DataFusionError> {
-        let source_dir = source_dir.as_ref();
-        let dest_dir = dest_dir.as_ref();
-
-        destination_system.mkdir_all(&dest_dir).await?;
-
-        let mut queue = vec![PathBuf::from("")];
-        while let Some(next) = queue.pop() {
-            let next_source_path = source_dir.join(&next);
-            for entry in source_system.list_files(&next_source_path).await? {
-                let entry_source_path = source_dir.join(&next).join(&entry.name);
-                let entry_dest_path = dest_dir.join(&next).join(&entry.name);
-
+        let mut queue = vec![(source_dir.as_ref().to_path_buf(), destination_dir.clone())];
+        
+        while let Some((current_source_dir, current_dest_dir)) = queue.pop() {
+            let entries = source_system.list_files(&current_source_dir).await?;
+            
+            for entry in entries {
+                let entry_source_path = current_source_dir.join(&entry.name);
+                let entry_destination_path = object_store::path::Path::from(format!("{}/{}", current_dest_dir, entry.name.to_string_lossy()));
+                
                 if entry.directory {
-                    destination_system.mkdir_all(&entry_dest_path).await?;
-                    queue.push(next.join(&entry.name));
+                    queue.push((entry_source_path, entry_destination_path));
                 } else {
                     let contents = source_system.read_file(&entry_source_path).await?;
-                    destination_system.write_file(&entry_dest_path, &contents).await?;
+                    destination_system.put(&entry_destination_path, contents.into()).await
+                        .map_err(|e| internal_datafusion_err!("Failed to put file: {}", e))?;
                 }
             }
         }
@@ -267,20 +276,105 @@ impl RocksDBStateBackend {
         Ok(())
     }
 
-    async fn find_checkpoint(&self, checkpoint: usize, partition_range: PartitionRange) -> Result<(bool, Vec<(String, PartitionRange)>), DataFusionError> {
-        let checkpoint_root_dir = Self::base_checkpoint_directory_path(&self.root_dir);
-
-        // Find the checkpoint in the local file system first. This is fairly inefficient
-        // TODO make use of the partition range when searching locally
-        let checkpoint_files = self.local_file_system.list_files(&checkpoint_root_dir).await?;
-        let checkpoint_dir = checkpoint_files
-            .iter()
-            .find(|entry| entry.name.to_str().map_or(false, |s| s.starts_with(&format!("{}__", checkpoint))));
-        if let Some(checkpoint_dir) = checkpoint_dir {
-            let checkpoint_path = checkpoint_root_dir.join(&checkpoint_dir.name);
-            println!("Moving to checkpoint at {}", self.local_file_system.get_physical_path(&checkpoint_path)?.display());
-            return Ok((true, vec![(checkpoint_path.to_string_lossy().to_string(), partition_range)]));
+    async fn download_dir(
+        source_system: &ObjectStoreRef,
+        source_dir: &object_store::path::Path,
+        destination_system: &(dyn FileSystemStorage + Send + Sync),
+        destination_dir: impl AsRef<Path>,
+    ) -> Result<(), DataFusionError> {
+        let destination_dir = destination_dir.as_ref();
+        
+        // Create destination directory
+        destination_system.mkdir_all(destination_dir).await?;
+        
+        // List all objects with the source_dir as prefix
+        let list_stream = source_system.list(Some(source_dir));
+        let objects: Vec<_> = list_stream.try_collect().await
+            .map_err(|e| internal_datafusion_err!("Failed to list objects: {}", e))?;
+        
+        for object in objects {
+            // Remove the source_dir prefix to get the relative path
+            let relative_path = if source_dir.parts().count() == 0 {
+                object.location.as_ref()
+            } else if let Some(stripped) = object.location.as_ref().strip_prefix(&format!("{}/", source_dir)) {
+                stripped
+            } else if object.location.as_ref() == source_dir.as_ref() {
+                // Handle case where the object is exactly the source_dir (shouldn't happen for directories but just in case)
+                continue;
+            } else {
+                // This shouldn't happen if we're listing with the correct prefix, but handle it gracefully
+                return Err(internal_datafusion_err!(
+                    "Object {} does not match source directory prefix {}",
+                    object.location,
+                    source_dir
+                ));
+            };
+            
+            let entry_destination_path = destination_dir.join(relative_path);
+            
+            // Ensure parent directory exists
+            if let Some(parent) = entry_destination_path.parent() {
+                destination_system.mkdir_all(parent).await?;
+            }
+            
+            // Download the file content
+            let result = source_system.get(&object.location).await
+                .map_err(|e| internal_datafusion_err!("Failed to get object: {}", e))?;
+            let content = result.bytes().await
+                .map_err(|e| internal_datafusion_err!("Failed to read object bytes: {}", e))?;
+            
+            // Write to destination
+            destination_system.write_file(&entry_destination_path, &content).await?;
         }
+
+        Ok(())
+    }
+
+    // async fn copy_dir_between_systems(
+    //     source_system: &(dyn FileSystemStorage + Send + Sync),
+    //     source_dir: impl AsRef<Path>,
+    //     destination_system: &(dyn FileSystemStorage + Send + Sync),
+    //     dest_dir: impl AsRef<Path>,
+    // ) -> Result<(), DataFusionError> {
+    //     let source_dir = source_dir.as_ref();
+    //     let dest_dir = dest_dir.as_ref();
+    //
+    //     destination_system.mkdir_all(&dest_dir).await?;
+    //
+    //     let mut queue = vec![PathBuf::from("")];
+    //     while let Some(next) = queue.pop() {
+    //         let next_source_path = source_dir.join(&next);
+    //         for entry in source_system.list_files(&next_source_path).await? {
+    //             let entry_source_path = source_dir.join(&next).join(&entry.name);
+    //             let entry_dest_path = dest_dir.join(&next).join(&entry.name);
+    //
+    //             if entry.directory {
+    //                 destination_system.mkdir_all(&entry_dest_path).await?;
+    //                 queue.push(next.join(&entry.name));
+    //             } else {
+    //                 let contents = source_system.read_file(&entry_source_path).await?;
+    //                 destination_system.write_file(&entry_dest_path, &contents).await?;
+    //             }
+    //         }
+    //     }
+    //
+    //     Ok(())
+    // }
+
+    async fn find_checkpoint(&self, checkpoint: usize, partition_range: PartitionRange) -> Result<Vec<(String, PartitionRange)>, DataFusionError> {
+        // let checkpoint_root_dir = Self::base_checkpoint_directory_path(&self.local_root_dir);
+
+        // // Find the checkpoint in the local file system first. This is fairly inefficient
+        // // TODO make use of the partition range when searching locally
+        // let checkpoint_files = self.local_file_system.list_files(&checkpoint_root_dir).await?;
+        // let checkpoint_dir = checkpoint_files
+        //     .iter()
+        //     .find(|entry| entry.name.to_str().map_or(false, |s| s.starts_with(&format!("{}__", checkpoint))));
+        // if let Some(checkpoint_dir) = checkpoint_dir {
+        //     let checkpoint_path = checkpoint_root_dir.join(&checkpoint_dir.name);
+        //     println!("Moving to checkpoint at {}", self.local_file_system.get_physical_path(&checkpoint_path)?.display());
+        //     return Ok((true, vec![(checkpoint_path.to_string_lossy().to_string(), partition_range)]));
+        // }
 
         // If no local checkpoint was found, try to find it in the remote file system
         println!("Searching remotely");
@@ -289,7 +383,7 @@ impl RocksDBStateBackend {
             &self.partitions,
             &format!("{}", checkpoint),
         ).await?;
-        Ok((false, remote_checkpoints))
+        Ok(remote_checkpoints)
     }
 
     fn create_local_rocksdb_checkpoint(&self, checkpoint_dir: &PathBuf) -> Result<(), DataFusionError> {
@@ -298,6 +392,7 @@ impl RocksDBStateBackend {
             .map_err(|e| internal_datafusion_err!("Failed to create checkpoint: {}", e))?
             .create_checkpoint(&absolute_checkpoint_dir)
             .map_err(|e| internal_datafusion_err!("Failed to create checkpoint at {}: {}", absolute_checkpoint_dir.display(), e))?;
+        println!("Created RocksDB checkpoint at {}", absolute_checkpoint_dir.display());
         Ok(())
     }
 
@@ -344,41 +439,48 @@ impl RocksDBStateBackend {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use object_store::local::LocalFileSystem;
     use rocksdb::{IngestExternalFileOptions, IteratorMode, Options, SstFileWriter, DB};
     use rocksdb::checkpoint::Checkpoint;
     use crate::streaming::partitioning::PartitionRange;
     use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
     use crate::streaming::state::file_system::PrefixedLocalFileSystemStorage;
-    use crate::streaming::state::state::RocksDBStateBackend;
+    use crate::streaming::state::rocksdb_state_backend::RocksDBStateBackend;
+    use crate::streaming::utils::retry::retry_future;
 
     #[tokio::test]
     async fn storage_test() {
         let database_dir = tempfile::tempdir().unwrap();
         let backup_dir = tempfile::tempdir().unwrap();
 
-        let database_file_system = PrefixedLocalFileSystemStorage::new(database_dir.path());
-        let backup_file_system = PrefixedLocalFileSystemStorage::new(backup_dir.path());
+        let database_file_system = Arc::new(PrefixedLocalFileSystemStorage::new(database_dir.path()));
+        let backup_object_store = Arc::new(LocalFileSystem::new_with_prefix(backup_dir.path()).unwrap());
         let remote_checkpoint_storage = Arc::new(FileSystemStateStorage::new(
-            Arc::new(backup_file_system),
-            "state",
+            backup_object_store,
         ));
 
+        let partition_range = PartitionRange::unit();
         let mut backend = RocksDBStateBackend::open_new(
             "test_state".to_string(),
             PartitionRange::new(0, 10, 100),
-            remote_checkpoint_storage,
-            Arc::new(database_file_system),
+            remote_checkpoint_storage.clone(),
+            database_file_system,
         ).await.unwrap();
 
         backend.put(b"key1", b"value1").unwrap();
         assert_eq!(backend.get("key1").unwrap(), Some(b"value1".to_vec()));
         assert_eq!(backend.get("key2").unwrap(), None);
 
-        backend.checkpoint(1, PartitionRange::unit()).await.unwrap();
+        backend.checkpoint(1, partition_range.clone()).await.unwrap();
         backend.put(b"key2", b"value2").unwrap();
         assert_eq!(backend.get("key2").unwrap(), Some(b"value2".to_vec()));
 
-        backend.move_to_checkpoint(1, PartitionRange::unit()).await.unwrap();
+        // Wait for the checkpoint to finish
+        retry_future(10, || {
+            remote_checkpoint_storage.get_latest_operator_checkpoints("test_state", &partition_range)
+        }).await.unwrap();
+
+        backend.move_to_checkpoint(1, partition_range).await.unwrap();
         assert_eq!(backend.get("key1").unwrap(), Some(b"value1".to_vec()));
         assert_eq!(backend.get("key2").unwrap(), None);
     }

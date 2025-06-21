@@ -1,6 +1,10 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use futures_util::TryFutureExt;
+use object_store::{ObjectStore, UpdateVersion};
+use object_store::path::Path;
+use object_store::prefix::PrefixStore;
+use object_store::PutMode;
 use datafusion::common::{internal_datafusion_err, DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -8,11 +12,13 @@ use uuid::Uuid;
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::state::file_system::FileSystemStorage;
 
+pub type ObjectStoreRef = Arc<dyn ObjectStore>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionInfo {
     pub partition_range: PartitionRange,
     pub timestamp: u64,
-    pub checkpoint_dir: String,
+    pub checkpoint_part_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,39 +33,30 @@ pub struct LatestCheckpoints {
 }
 
 pub struct FileSystemStateStorage {
-    storage: Arc<dyn FileSystemStorage + Send + Sync>,
-    root_dir: PathBuf,
+    storage: ObjectStoreRef,
 }
 
 impl FileSystemStateStorage {
-    pub fn new<P: AsRef<Path>>(
-        storage: Arc<dyn FileSystemStorage + Send + Sync>,
-        root_dir: P,
-    ) -> Self {
-        Self {
-            storage,
-            root_dir: root_dir.as_ref().to_path_buf(),
-        }
+    pub fn new(storage: ObjectStoreRef) -> Self {
+        Self { storage }
     }
 
-    pub fn storage(&self) -> &Arc<dyn FileSystemStorage + Send + Sync> {
-        &self.storage
+    pub async fn start_checkpoint_part(&self, operator_id: &str) -> Result<String> {
+        // TODO use operator_id
+        let checkpoint_part_id = Uuid::new_v4().to_string();
+        Ok(checkpoint_part_id)
     }
 
-    pub async fn start_checkpoint(&self, operator_id: &str) -> Result<PathBuf> {
-        let checkpoint_id = Uuid::new_v4().to_string();
-        let checkpoint_path = self.get_checkpoint_path(operator_id, &checkpoint_id);
-        
-        self.storage.mkdir_all(&checkpoint_path).await?;
-        
-        Ok(checkpoint_path)
+    pub fn get_checkpoint_file_system(&self, operator_id: &str, checkpoint_part_id: &str) -> ObjectStoreRef {
+        let checkpoint_path = self.get_checkpoint_path(operator_id, checkpoint_part_id);
+        Arc::new(PrefixStore::new(self.storage.clone(), checkpoint_path))
     }
 
     pub async fn complete_checkpoint(
         &self,
         operator_id: &str,
         checkpoint_id: &str,
-        checkpoint_dir: &Path,
+        checkpoint_part_id: String,
         partition_range: PartitionRange,
     ) -> Result<()> {
         let timestamp = SystemTime::now()
@@ -70,27 +67,26 @@ impl FileSystemStateStorage {
         let partition_info = PartitionInfo {
             partition_range,
             timestamp,
-            checkpoint_dir: checkpoint_dir.to_string_lossy().to_string(),
+            checkpoint_part_id,
         };
 
-        let latest_path = self.get_latest_json_path(operator_id);
-        let mut latest = self.read_latest_json(&latest_path).await?;
+        self.atomic_update_latest_json(operator_id, |mut latest| {
+            if let Some(existing_entry) = latest
+                .completed_checkpoints
+                .iter_mut()
+                .find(|entry| entry.id == checkpoint_id)
+            {
+                existing_entry.partitions.push(partition_info);
+            } else {
+                let new_entry = CheckpointEntry {
+                    id: checkpoint_id.to_string(),
+                    partitions: vec![partition_info],
+                };
+                latest.completed_checkpoints.push(new_entry);
+            }
 
-        if let Some(existing_entry) = latest
-            .completed_checkpoints
-            .iter_mut()
-            .find(|entry| entry.id == checkpoint_id)
-        {
-            existing_entry.partitions.push(partition_info);
-        } else {
-            let new_entry = CheckpointEntry {
-                id: checkpoint_id.to_string(),
-                partitions: vec![partition_info],
-            };
-            latest.completed_checkpoints.push(new_entry);
-        }
-
-        self.write_latest_json(&latest_path, &latest).await?;
+            Ok(latest)
+        }).await?;
 
         Ok(())
     }
@@ -101,8 +97,7 @@ impl FileSystemStateStorage {
         partition_range: &PartitionRange,
         checkpoint_id: &str,
     ) -> Result<Vec<(String, PartitionRange)>> {
-        let latest_path = self.get_latest_json_path(operator_id);
-        let latest = self.read_latest_json(&latest_path).await?;
+        let latest = self.read_latest_json(operator_id).await?;
 
         println!("Read latest file: {:?}", latest);
 
@@ -119,7 +114,7 @@ impl FileSystemStateStorage {
                 let intersecting_partitions = Self::get_non_overlapping_partitions(partition_range, &partition_ranges)?;
                 let partition_infos = intersecting_partitions.into_iter()
                     .map(|overlap| (
-                        checkpoint_entry.partitions[overlap.index].checkpoint_dir.clone(),
+                        checkpoint_entry.partitions[overlap.index].checkpoint_part_id.clone(),
                         overlap.selected_partition_range,
                     ))
                     .collect::<Vec<_>>();
@@ -137,9 +132,7 @@ impl FileSystemStateStorage {
         operator_id: &str,
         partition_range: &PartitionRange,
     ) -> Result<(String, Vec<(String, PartitionRange)>)> {
-        let latest_path = self.get_latest_json_path(operator_id);
-        let latest = self.read_latest_json(&latest_path).await?;
-
+        let latest = self.read_latest_json(operator_id).await?;
         Ok(latest
             .completed_checkpoints
             .into_iter()
@@ -151,7 +144,7 @@ impl FileSystemStateStorage {
                 let intersecting_partitions = Self::get_non_overlapping_partitions(partition_range, &partition_ranges)?;
                 let partition_infos = intersecting_partitions.into_iter()
                     .map(|overlap| (
-                        checkpoint_entry.partitions[overlap.index].checkpoint_dir.clone(),
+                        checkpoint_entry.partitions[overlap.index].checkpoint_part_id.clone(),
                         overlap.selected_partition_range,
                     ))
                     .collect::<Vec<_>>();
@@ -164,29 +157,24 @@ impl FileSystemStateStorage {
             ))?)
     }
 
-    fn get_checkpoint_path(&self, operator_id: &str, checkpoint_id: &str) -> PathBuf {
-        self.root_dir
-            .join("operators")
-            .join(operator_id)
-            .join("checkpoints")
-            .join(checkpoint_id)
+    fn get_checkpoint_path(&self, operator_id: &str, checkpoint_id: &str) -> Path {
+        Path::from(format!(
+            "operators/{}/checkpoints/{}",
+            operator_id, checkpoint_id
+        ))
     }
 
-    fn get_latest_json_path(&self, operator_id: &str) -> PathBuf {
-        self.root_dir
-            .join("operators")
-            .join(operator_id)
-            .join("latest.json")
+    fn get_latest_json_path(&self, operator_id: &str) -> Path {
+        Path::from(format!("operators/{}/latest.json", operator_id))
     }
 
-    async fn read_latest_json(&self, path: &Path) -> Result<LatestCheckpoints> {
-        match self.storage.read_file(path).await {
-            Ok(content) => {
-                let content_str = String::from_utf8(content).map_err(|e| {
-                    DataFusionError::Internal(format!("Failed to parse file as UTF-8: {}", e))
-                })?;
-                
-                serde_json::from_str(&content_str).map_err(|e| {
+    async fn read_latest_json(&self, operator_id: &str) -> Result<LatestCheckpoints> {
+        let path = self.get_latest_json_path(operator_id);
+        match self.storage.get(&path).await {
+            Ok(result) => {
+                let content = result.bytes().await
+                    .map_err(|e| internal_datafusion_err!("Failed to get file bytes: {}", e))?;
+                serde_json::from_slice(content.as_ref()).map_err(|e| {
                     DataFusionError::Internal(format!("Failed to parse JSON: {}", e))
                 })
             }
@@ -198,21 +186,88 @@ impl FileSystemStateStorage {
         }
     }
 
-    async fn write_latest_json(&self, path: &Path, latest: &LatestCheckpoints) -> Result<()> {
-        let json_content = serde_json::to_string_pretty(latest).map_err(|e| {
-            DataFusionError::Internal(format!("Failed to serialize JSON: {}", e))
-        })?;
+    /// Atomically update the latest.json file using optimistic concurrency control with ETags.
+    ///
+    /// This method:
+    /// 1. Reads the current latest.json file and its ETag
+    /// 2. Calls the provided callback with the parsed LatestCheckpoints
+    /// 3. Conditionally writes the modified LatestCheckpoints back only if the ETag matches
+    /// 4. Loops on ETag conflicts until successful or non-conflict error occurs
+    /// 5. Returns Ok(()) on success, or Err on non-conflict failures
+    pub async fn atomic_update_latest_json<F>(
+        &self,
+        operator_id: &str,
+        mut callback: F,
+    ) -> Result<()>
+    where
+        F: FnMut(LatestCheckpoints) -> Result<LatestCheckpoints>,
+    {
+        let latest_path = self.get_latest_json_path(operator_id);
 
-        if let Some(parent) = path.parent() {
-            self.storage.mkdir_all(parent).await?;
+        loop {
+            // Read current state with ETag
+            let (current_latest, e_tag, version) = match self.storage.get(&latest_path).await {
+                Ok(result) => {
+                    let e_tag = result.meta.e_tag.clone();
+                    let version = result.meta.version.clone();
+                    let content = result.bytes().await
+                        .map_err(|e| internal_datafusion_err!("Failed to get file bytes: {}", e))?;
+                    let latest = serde_json::from_slice(content.as_ref()).map_err(|e| {
+                        DataFusionError::Internal(format!("Failed to parse JSON: {}", e))
+                    })?;
+                    (latest, e_tag, version)
+                }
+                Err(_) => {
+                    // File doesn't exist, use empty state with no ETag
+                    (LatestCheckpoints {
+                        completed_checkpoints: Vec::new(),
+                    }, None, None)
+                }
+            };
+
+            // Apply the callback to get the updated state
+            let updated_latest = callback(current_latest)?;
+
+            // Serialize the updated content
+            let json_content = serde_json::to_string_pretty(&updated_latest).map_err(|e| {
+                DataFusionError::Internal(format!("Failed to serialize JSON: {}", e))
+            })?;
+
+            // Conditionally write back using ETag
+            let put_result = match e_tag {
+                Some(_) => {
+                    // File exists, use conditional update
+                    self.storage.put_opts(
+                        &latest_path,
+                        json_content.into(),
+                        PutMode::Update(UpdateVersion {
+                            e_tag,
+                            version,
+                        }).into(),
+                    ).await
+                }
+                None => {
+                    // File doesn't exist, use conditional create
+                    self.storage.put_opts(&latest_path, json_content.into(), PutMode::Create.into())
+                        .await
+                }
+            };
+
+            match put_result {
+                Ok(_) => {
+                    println!("Atomically updated latest json to {:?}, {:?}", latest_path, updated_latest);
+                    return Ok(()); // Update succeeded
+                }
+                Err(object_store::Error::Precondition { .. }) => {
+                    // ETag mismatch or file already exists, loop to retry
+                    continue;
+                }
+                Err(e) => {
+                    // Other error, return immediately
+                    return Err(DataFusionError::Internal(format!("Failed to write JSON: {}", e)));
+                }
+            }
         }
-
-        self.storage
-            .write_file(path, json_content.as_bytes())
-            .await?;
-        println!("Wrote latest json to {:?}, {:?}", path, latest);
-
-        Ok(())
     }
 
     fn get_non_overlapping_partitions(
@@ -292,36 +347,33 @@ struct OverlappingPartition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streaming::state::file_system::TempdirFileSystemStorage;
+    use object_store::local::LocalFileSystem;
     use std::sync::Arc;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_start_checkpoint() -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let storage = Arc::new(TempdirFileSystemStorage::from_tempdir(temp_dir));
-        let checkpoint_storage = FileSystemStateStorage::new(storage, "test");
+        let (_temp_dir, checkpoint_storage) = create_temp_checkpoint_store()?;
 
-        let checkpoint_path = checkpoint_storage.start_checkpoint("operator1").await?;
-        
-        assert!(checkpoint_path.to_string_lossy().contains("operators/operator1/checkpoints/"));
-        
+        let _checkpoint_id = checkpoint_storage.start_checkpoint_part("operator1").await?;
+
+        // This test just confirms that no error is thrown
         Ok(())
     }
 
     #[tokio::test]
     async fn test_complete_checkpoint() -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let storage = Arc::new(TempdirFileSystemStorage::from_tempdir(temp_dir));
-        let checkpoint_storage = FileSystemStateStorage::new(storage, "test");
+        let (_temp_dir, checkpoint_storage) = create_temp_checkpoint_store()?;
+        let operator_id = "operator1";
+        let checkpoint_id = "chk1";
 
-        let checkpoint_path = checkpoint_storage.start_checkpoint("operator1").await?;
+        let checkpoint_part_id = checkpoint_storage.start_checkpoint_part(operator_id).await?;
         let partition_range = PartitionRange::new(0, 1, 10);
         
-        checkpoint_storage.complete_checkpoint("operator1", "chk1", &checkpoint_path, partition_range).await?;
+        // For the checkpoint directory, we'll use a mock path since we're testing the JSON metadata
+        checkpoint_storage.complete_checkpoint(operator_id, checkpoint_id, checkpoint_part_id, partition_range).await?;
 
-        let latest_path = checkpoint_storage.get_latest_json_path("operator1");
-        let latest = checkpoint_storage.read_latest_json(&latest_path).await?;
+        let latest = checkpoint_storage.read_latest_json(operator_id).await?;
         
         assert_eq!(latest.completed_checkpoints.len(), 1);
         assert_eq!(latest.completed_checkpoints[0].partitions.len(), 1);
@@ -416,5 +468,14 @@ mod tests {
                 selected_partition_range: PartitionRange::new(8, 12, 16),
             },
         ]))
+    }
+
+    fn create_temp_checkpoint_store() -> Result<(TempDir, FileSystemStateStorage), DataFusionError> {
+        let temp_dir = TempDir::new()?;
+        let local_fs = LocalFileSystem::new_with_prefix(temp_dir.path())
+            .map_err(|e| DataFusionError::Internal(format!("Failed to create LocalFileSystem: {}", e)))?;
+        let storage = Arc::new(local_fs) as ObjectStoreRef;
+        let checkpoint_storage = FileSystemStateStorage::new(storage);
+        Ok((temp_dir, checkpoint_storage))
     }
 }

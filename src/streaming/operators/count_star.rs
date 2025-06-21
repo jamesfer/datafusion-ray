@@ -4,7 +4,7 @@ use crate::streaming::model::operator_function::{CreateOperatorFunction2, Operat
 use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
-use crate::streaming::state::state::RocksDBStateBackend;
+use crate::streaming::state::rocksdb_state_backend::RocksDBStateBackend;
 use async_trait::async_trait;
 use datafusion::common::{internal_datafusion_err, record_batch, DataFusionError};
 use eyeball::{AsyncLock, SharedObservable};

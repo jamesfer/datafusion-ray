@@ -2,7 +2,7 @@ use crate::streaming::model::stream_item::Marker;
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
-use crate::streaming::state::state::RocksDBStateBackend;
+use crate::streaming::state::rocksdb_state_backend::RocksDBStateBackend;
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
 use async_trait::async_trait;

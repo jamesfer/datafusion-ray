@@ -15,7 +15,7 @@ use datafusion::error::DataFusionError;
 use futures::stream::{StreamExt, TryStreamExt};
 use futures::Stream;
 use futures_util::stream::FuturesOrdered;
-use pyo3::PyResult;
+use pyo3::{PyResult, PyErr};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -70,9 +70,10 @@ impl ActiveCoordinator {
         tasks: Vec<TaskDefinition>,
         remote_checkpoint_dir: String,
     ) -> PyResult<Self> {
+        let local_fs = object_store::local::LocalFileSystem::new_with_prefix(&remote_checkpoint_dir)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create LocalFileSystem: {}", e)))?;
         let remote_checkpoint_storage = Arc::new(FileSystemStateStorage::new(
-            Arc::new(PrefixedLocalFileSystemStorage::new(remote_checkpoint_dir.clone())),
-            "state", // Matches a fixed prefix in the worker process constructor
+            Arc::new(local_fs),
         ));
         let processors = compute_runtime.start_many_processors(tasks.len(), Some(remote_checkpoint_dir.clone())).await?;
 

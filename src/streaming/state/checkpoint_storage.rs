@@ -1,14 +1,13 @@
 use datafusion::common::{internal_datafusion_err, DataFusionError, Result};
 use futures_util::TryFutureExt;
-use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
 
 use crate::streaming::partitioning::PartitionRange;
+use crate::streaming::state::file_structure_constants::{get_remote_checkpoint_part_dir_path, make_checkpoint_part_id};
 use crate::streaming::state::file_system::FileSystemStorage;
 use crate::streaming::state::operator_latest_json::OperatorLatestJson;
 
@@ -28,13 +27,12 @@ impl FileSystemStateStorage {
     pub async fn start_checkpoint_part(&self, operator_id: &str) -> Result<String> {
         // TODO one day this will need to add a pending entry to the metadata to prevent files
         //  being deleted while the checkpoint is in progress.
-        let checkpoint_part_id = format!("checkpoint-part_{}", Uuid::new_v4().to_string());
-        Ok(checkpoint_part_id)
+        Ok(make_checkpoint_part_id())
     }
 
     // Returns an object store instance scoped to the checkpoint directory for the given operator and checkpoint part.
     pub fn get_scoped_file_system(&self, operator_id: &str, checkpoint_part_id: &str) -> ObjectStoreRef {
-        let checkpoint_path = self.get_checkpoint_path(operator_id, checkpoint_part_id);
+        let checkpoint_path = get_remote_checkpoint_part_dir_path(operator_id, checkpoint_part_id);
         Arc::new(PrefixStore::new(self.storage.clone(), checkpoint_path))
     }
 
@@ -91,13 +89,6 @@ impl FileSystemStateStorage {
                 state_id,
                 partition_range
             ))
-    }
-
-    fn get_checkpoint_path(&self, state_id: &str, checkpoint_id: &str) -> Path {
-        Path::from(format!(
-            "operators/{}/checkpoints/{}",
-            state_id, checkpoint_id
-        ))
     }
 }
 

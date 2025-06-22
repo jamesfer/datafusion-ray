@@ -1,14 +1,11 @@
-use std::ffi::OsString;
-use std::{fs, mem};
+use crate::streaming::state::file_system::FileSystemStorage;
+use datafusion::common::{internal_datafusion_err, DataFusionError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use pyo3::PyResult;
-use datafusion::common::{internal_datafusion_err, DataFusionError};
-use crate::streaming::state::checkpoint_storage::ObjectStoreRef;
-use crate::streaming::state::file_system::FileSystemStorage;
+use std::mem;
+use crate::streaming::state::file_structure_constants::{get_base_checkpoint_dir_path, get_base_working_dir_path, make_working_dir_path};
 
 pub struct LocalRocksDBState {
-    local_root_dir: PathBuf,
     local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     open_db: rocksdb::DB,
     working_dir: PathBuf,
@@ -16,17 +13,15 @@ pub struct LocalRocksDBState {
 
 impl LocalRocksDBState {
     pub async fn open_new(
-        local_root_dir: PathBuf,
         local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     ) -> Result<Self, DataFusionError> {
         // Create the initial main directories to prevent directory does not exist errors
-        local_file_system.mkdir_all(&Self::base_working_directory_path(&local_root_dir)).await?;
-        local_file_system.mkdir_all(&Self::base_checkpoint_directory_path(&local_root_dir)).await?;
+        local_file_system.mkdir_all(&get_base_working_dir_path()).await?;
+        local_file_system.mkdir_all(&get_base_checkpoint_dir_path()).await?;
 
-        let working_dir = Self::create_working_directory_path(&local_root_dir);
+        let working_dir = make_working_dir_path();
         let open_db = Self::open_rocksdb_database(&local_file_system, &working_dir)?;
         Ok(Self {
-            local_root_dir,
             local_file_system,
             open_db,
             working_dir,
@@ -63,7 +58,7 @@ impl LocalRocksDBState {
     }
 
     pub async fn load_from_checkpoint_parts(&mut self, checkpoint_part_paths: Vec<PathBuf>) -> Result<(), DataFusionError> {
-        let new_working_dir = Self::create_working_directory_path(&self.local_root_dir);
+        let new_working_dir = make_working_dir_path();
 
         let new_db = if checkpoint_part_paths.len() == 1 {
             // Fast path when there is only one checkpoint
@@ -132,23 +127,6 @@ impl LocalRocksDBState {
         let options = rocksdb::Options::default();
         let absolute_old_working_dir = self.local_file_system.get_physical_path(working_dir.as_ref())?;
         rocksdb::DB::destroy(&options, &absolute_old_working_dir).to_datafusion_result()
-    }
-
-    fn create_working_directory_path(root_dir: impl AsRef<Path>) -> PathBuf {
-        Self::base_working_directory_path(&root_dir).join(uuid::Uuid::new_v4().to_string())
-    }
-
-    fn base_working_directory_path(root_dir: impl AsRef<Path>) -> PathBuf {
-        root_dir.as_ref().join("working")
-    }
-
-    pub fn create_checkpoint_directory_path(&self, checkpoint: &str) -> PathBuf {
-        Self::base_checkpoint_directory_path(&self.local_root_dir)
-            .join(format!("{}__unique-suffix_{}", checkpoint, uuid::Uuid::new_v4()))
-    }
-
-    fn base_checkpoint_directory_path(root_dir: impl AsRef<Path>) -> PathBuf {
-        root_dir.as_ref().join("checkpoint")
     }
 }
 

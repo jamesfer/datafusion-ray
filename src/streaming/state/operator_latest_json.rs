@@ -5,6 +5,7 @@ use bytes::Bytes;
 use datafusion::common::DataFusionError;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
+use crate::streaming::state::file_structure_constants::get_latest_json_path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionInfo {
@@ -92,7 +93,7 @@ impl OperatorLatestJson {
     }
 
     pub async fn read_latest_json(&self, state_id: &str) -> datafusion::common::Result<LatestCheckpoints> {
-        let path = self.get_latest_json_path(state_id);
+        let path = get_latest_json_path(state_id);
         match read_file(&self.storage, &path).await? {
             None => {
                 Ok(LatestCheckpoints {
@@ -116,7 +117,7 @@ impl OperatorLatestJson {
     where
         F: FnMut(LatestCheckpoints) -> Result<LatestCheckpoints, DataFusionError>,
     {
-        let latest_path = self.get_latest_json_path(state_id);
+        let latest_path = get_latest_json_path(state_id);
         atomic_update_file(
             &self.storage,
             &latest_path,
@@ -139,9 +140,5 @@ impl OperatorLatestJson {
                 Ok(Some(Bytes::from(json_content)))
             },
         ).await
-    }
-
-    fn get_latest_json_path(&self, state_id: &str) -> Path {
-        Path::from(format!("operators/{}/latest.json", state_id))
     }
 }

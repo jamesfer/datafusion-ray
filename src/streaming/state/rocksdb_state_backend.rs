@@ -10,12 +10,12 @@ use tokio::task::JoinHandle;
 use datafusion::common::{internal_datafusion_err, DataFusionError};
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::state::checkpoint_storage::{FileSystemStateStorage, ObjectStoreRef};
-use crate::streaming::state::file_system::FileSystemStorage;
+use crate::streaming::state::file_structure_constants::make_checkpoint_dir_path;
+use crate::streaming::state::file_system::{FileSystemStorage, PrefixedLocalFileSystemStorage};
 use crate::streaming::state::local_rocksdb_state::LocalRocksDBState;
 
 pub struct RocksDBStateBackend {
     state_id: String,
-    local_root_dir: OsString,
     partitions: PartitionRange,
     remote_checkpoint_storage: Arc<FileSystemStateStorage>,
     local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
@@ -32,9 +32,10 @@ impl RocksDBStateBackend {
         local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     ) -> Result<Self, DataFusionError> {
         let root_dir = Self::create_root_directory_path(&state_id, &partitions);
+        let scoped_file_system = Arc::new(PrefixedLocalFileSystemStorage::new(local_file_system.get_physical_path(&root_dir)));
 
         // Open the main database
-        let local_rocksdb = LocalRocksDBState::open_new(root_dir.clone(), local_file_system.clone()).await?;
+        let local_rocksdb = LocalRocksDBState::open_new(scoped_file_system.clone()).await?;
 
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let background_task = tokio::spawn({
@@ -53,10 +54,9 @@ impl RocksDBStateBackend {
 
         Ok(Self {
             state_id,
-            local_root_dir: root_dir.into_os_string(),
             partitions,
             remote_checkpoint_storage,
-            local_file_system,
+            local_file_system: scoped_file_system,
             local_rocksdb,
             background_sync_channel: sender,
             background_task,
@@ -128,7 +128,7 @@ impl RocksDBStateBackend {
     async fn download_remote_checkpoint_part(&mut self, checkpoint_id: &String, checkpoint_part_id: &String) -> Result<PathBuf, DataFusionError> {
         let remote_checkpoint_file_system = self.remote_checkpoint_storage.get_scoped_file_system(&self.state_id, &checkpoint_part_id);
         let remote_path = object_store::path::Path::default();
-        let destination_path = self.local_rocksdb.create_checkpoint_directory_path(&checkpoint_id);
+        let destination_path = make_checkpoint_dir_path(&checkpoint_id);
         Self::download_dir(
             &remote_checkpoint_file_system,
             &remote_path,

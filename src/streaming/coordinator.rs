@@ -146,7 +146,7 @@ impl ActiveCoordinator {
             .map(|partition| {
                 let remote_checkpoint_storage = self.remote_checkpoint_storage.clone();
                 async move {
-                    let (checkpoint_id, _) = remote_checkpoint_storage.get_latest_operator_checkpoints(
+                    let (checkpoint_id, _) = remote_checkpoint_storage.get_latest_state_checkpoint_parts(
                         task_state_id,
                         &partition,
                     ).await?;

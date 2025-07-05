@@ -4,7 +4,7 @@ use local_ip_address::local_ip;
 use datafusion::common::internal_datafusion_err;
 use datafusion::error::DataFusionError;
 use crate::streaming::runtime::Runtime;
-use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
+use crate::streaming::state::remote_checkpoint_storage::RemoteCheckpointStorage;
 use crate::streaming::state::file_system::TempdirFileSystemStorage;
 use object_store::local::LocalFileSystem;
 
@@ -26,7 +26,7 @@ pub async fn make_test_runtime() -> Result<Arc<Runtime>, DataFusionError> {
         LocalFileSystem::new_with_prefix(remote_file_system_tempdir.path())
             .map_err(|e| internal_datafusion_err!("Failed to create LocalFileSystem: {}", e))?
     );
-    let remote_state_storage = Arc::new(FileSystemStateStorage::new(
+    let remote_state_storage = Arc::new(RemoteCheckpointStorage::new(
         remote_object_store,
     ));
 

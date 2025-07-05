@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
+use crate::streaming::state::remote_checkpoint_storage::RemoteCheckpointStorage;
 use crate::streaming::state::file_system::{FileSystemStorage, TempdirFileSystemStorage};
 use object_store::local::LocalFileSystem;
 
@@ -35,7 +35,7 @@ impl WorkerProcess {
             LocalFileSystem::new_with_prefix(temp_dir.path())
                 .map_err(|e| internal_datafusion_err!("Failed to create LocalFileSystem: {}", e))?
         );
-        let remote_state_store = Arc::new(FileSystemStateStorage::new(
+        let remote_state_store = Arc::new(RemoteCheckpointStorage::new(
             remote_object_store,
         ));
         Self::start_with_remote_file_system(
@@ -44,7 +44,7 @@ impl WorkerProcess {
         ).await
     }
 
-    pub async fn start_with_remote_file_system(name: String, remote_state_store: Arc<FileSystemStateStorage>) -> Result<Self, DataFusionError> {
+    pub async fn start_with_remote_file_system(name: String, remote_state_store: Arc<RemoteCheckpointStorage>) -> Result<Self, DataFusionError> {
         let name = format!("[{}]", name);
         let local_ip_addr = local_ip()
             .map_err(|err| internal_datafusion_err!("Failed to get worker local ip: {}", err))?;
@@ -155,7 +155,7 @@ mod tests {
     use crate::streaming::model::sitem::SItem;
     use crate::streaming::model::stream_item::{Marker, StreamItem};
     use crate::streaming::runtime::create_remote_stream::create_remote_stream_no_runtime;
-    use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
+    use crate::streaming::state::remote_checkpoint_storage::RemoteCheckpointStorage;
 
     #[tokio::test]
     pub async fn single_output_task() {
@@ -896,7 +896,7 @@ mod tests {
     pub async fn restarting_with_remote_state() {
         let temp_dir = make_temp_dir("shared-remote").unwrap();
         let remote_file_system = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap());
-        let remote_state_store = Arc::new(FileSystemStateStorage::new(
+        let remote_state_store = Arc::new(RemoteCheckpointStorage::new(
             remote_file_system.clone(),
         ));
         let worker1 = WorkerProcess::start_with_remote_file_system(format!("worker1-{}", uuid::Uuid::new_v4()), remote_state_store.clone()).await.unwrap();

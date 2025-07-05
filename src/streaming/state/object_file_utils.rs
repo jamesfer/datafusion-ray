@@ -2,10 +2,10 @@ use std::borrow::Borrow;
 use bytes::Bytes;
 use object_store::{path::Path, Error as ObjectStoreError, PutMode, UpdateVersion};
 use datafusion::common::{internal_datafusion_err, DataFusionError};
-use crate::streaming::state::checkpoint_storage::{LatestCheckpoints, ObjectStoreRef};
+use crate::streaming::state::remote_checkpoint_storage::ObjectStoreRef;
 
-pub async fn read_file(storage: &ObjectStoreRef, path: impl AsRef<Path>) -> Result<Option<Bytes>, DataFusionError> {
-    match storage.get(path.as_ref()).await {
+pub async fn read_file(storage: &ObjectStoreRef, path: &Path) -> Result<Option<Bytes>, DataFusionError> {
+    match storage.get(&path).await {
         Ok(result) => {
             let content = result.bytes().await
                 .map_err(|e| internal_datafusion_err!("Failed to get file bytes: {}", e))?;
@@ -26,15 +26,15 @@ pub async fn read_file(storage: &ObjectStoreRef, path: impl AsRef<Path>) -> Resu
 /// 5. Returns Ok(()) on success, or Err on non-conflict failures
 pub async fn atomic_update_file<F>(
     storage: &ObjectStoreRef,
-    path: impl AsRef<Path>,
+    path: &Path,
     mut callback: F,
 ) -> Result<(), DataFusionError>
 where
-    F: FnMut(Option<Bytes>) -> Result<Option<Bytes>, DataFusionError>,
+    F: FnMut(Option<Bytes>) -> Result<Bytes, DataFusionError>,
 {
     loop {
         // Read current state with ETag
-        let current_file = match storage.get(&path).await {
+        let current_file = match storage.get(path).await {
             Ok(result) => {
                 let version = result.meta.version.clone();
                 let e_tag = match &result.meta.e_tag {
@@ -72,10 +72,10 @@ where
 
         // Conditionally write back using ETag
         let put_result = match (updated_content, original_file_meta) {
-            (Some(updated_content), Some((e_tag, version))) => {
+            (updated_content, Some((e_tag, version))) => {
                 // Original file existed, use conditional update
                 storage.put_opts(
-                    &path,
+                    path,
                     updated_content.into(),
                     PutMode::Update(UpdateVersion {
                         e_tag: Some(e_tag),
@@ -83,21 +83,10 @@ where
                     }).into(),
                 ).await
             }
-            (Some(updated_content), None) => {
+            (updated_content, None) => {
                 // File doesn't exist, use conditional create
-                storage.put_opts(&path, updated_content.into(), PutMode::Create.into())
+                storage.put_opts(path, updated_content.into(), PutMode::Create.into())
                     .await
-            }
-            (None, Some((e_tag, version))) => {
-                // The original file existed, but callback returned None, use conditional delete
-                storage.delete_opts(&path, UpdateVersion {
-                    e_tag: Some(e_tag),
-                    version,
-                }).await
-            }
-            (None, None) => {
-                // The original file didn't exist, and callback returned None, nothing to do
-                return Ok(()); // No update needed
             }
         };
 
@@ -114,5 +103,60 @@ where
                 return Err(DataFusionError::Internal(format!("Failed to write JSON: {}", e)));
             }
         }
+    }
+}
+
+pub struct LazyFileObject<T> {
+    storage: ObjectStoreRef,
+    pub path: Path,
+}
+
+impl <T> LazyFileObject<T> {
+    pub fn new(storage: ObjectStoreRef, path: Path) -> Self {
+        Self { storage, path }
+    }
+
+    pub async fn read_from_json(&self) -> Result<Option<T>, DataFusionError>
+    where T: serde::Deserialize
+    {
+        match read_file(&self.storage, &self.path).await? {
+            None => {
+                Ok(None)
+            }
+            Some(content) => {
+                serde_json::from_slice(content.as_ref())
+                    .map(Some)
+                    .map_err(|e| {
+                        internal_datafusion_err!("Failed to parse JSON: {}", e)
+                    })
+            }
+        }
+    }
+
+    // Update the file optimistically
+    pub async fn atomic_update<F>(&self, mut callback: F) -> Result<(), DataFusionError>
+    where
+        F: FnMut(Option<T>) -> Result<T, DataFusionError>,
+        T: serde::Deserialize + serde::Serialize,
+    {
+        atomic_update_file(
+            &self.storage,
+            &self.path,
+            |current_content| {
+                let current = current_content
+                    .map(|bytes| serde_json::from_slice(bytes.as_ref()).map_err(|e| {
+                        DataFusionError::Internal(format!("Failed to parse JSON: {}", e))
+                    }))
+                    .transpose()?;
+                let updated = callback(current)?;
+
+                // Serialize the updated content
+                let json_content = serde_json::to_vec_pretty(&updated).map_err(|e| {
+                    DataFusionError::Internal(format!("Failed to serialize JSON: {}", e))
+                })?;
+
+                Ok(Bytes::from(json_content))
+            },
+        ).await
     }
 }

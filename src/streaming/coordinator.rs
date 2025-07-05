@@ -5,7 +5,7 @@ use crate::streaming::model::sitem::SItem;
 use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::create_remote_stream::create_remote_stream_no_runtime;
-use crate::streaming::state::checkpoint_storage::FileSystemStateStorage;
+use crate::streaming::state::remote_checkpoint_storage::RemoteCheckpointStorage;
 use crate::streaming::state::file_system::PrefixedLocalFileSystemStorage;
 use crate::streaming::utils::retry::retry_future;
 use crate::streaming::worker_process::InitialSchedulingDetails;
@@ -59,7 +59,7 @@ impl StaticCoordinator {
 
 pub struct ActiveCoordinator {
     compute_runtime: Arc<ComputeRuntime>,
-    remote_checkpoint_storage: Arc<FileSystemStateStorage>,
+    remote_checkpoint_storage: Arc<RemoteCheckpointStorage>,
     remote_checkpoint_dir: String,
     tasks: Vec<(TaskDefinition, Vec<(String, RemoteProcessor, PartitionRange)>)>,
 }
@@ -72,7 +72,7 @@ impl ActiveCoordinator {
     ) -> PyResult<Self> {
         let local_fs = object_store::local::LocalFileSystem::new_with_prefix(&remote_checkpoint_dir)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create LocalFileSystem: {}", e)))?;
-        let remote_checkpoint_storage = Arc::new(FileSystemStateStorage::new(
+        let remote_checkpoint_storage = Arc::new(RemoteCheckpointStorage::new(
             Arc::new(local_fs),
         ));
         let processors = compute_runtime.start_many_processors(tasks.len(), Some(remote_checkpoint_dir.clone())).await?;

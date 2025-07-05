@@ -103,6 +103,7 @@ impl PartitionRange {
         // Easy implementation, not quite optimal, but good enough for now.
 
         // All partition ranges will be converted to the same partition count for comparison
+        // TODO this loop is probably not needed when all PartitionRanges are based on the same partition count
         let target_partitions = available_partitions.iter()
             .map(|partition_range| partition_range.partitions())
             .chain([self.partitions()])

@@ -194,7 +194,7 @@ impl OperatorFunction for CountByKeyFunction {
                                 // Store each count for the key
                                 state.put(key.to_be_bytes(), local_count.to_be_bytes())?;
                             }
-                            state.checkpoint(marker.checkpoint_number as usize, partition_range).await?;
+                            state.local_checkpoint(marker.checkpoint_number as usize, partition_range).await?;
 
                             // Pass the marker downstream
                             Ok(Some(SItem::Marker(marker)))

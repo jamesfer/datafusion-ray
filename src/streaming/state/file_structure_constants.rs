@@ -15,8 +15,16 @@ pub fn get_remote_checkpoint_part_dir_path(state_id: &str, checkpoint_part_id: &
     ))
 }
 
+pub fn get_remote_state_dir_path(operator_id: &str, state_id: &str) -> Path {
+    Path::from(format!("operators/{operator_id}/states/{state_id}"))
+}
+
 pub fn get_latest_json_path(state_id: &str) -> Path {
     Path::from(format!("operators/{}/latest.json", state_id))
+}
+
+pub fn get_pipeline_latest_json_path() -> Path {
+    Path::from("latest.json")
 }
 
 

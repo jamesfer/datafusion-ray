@@ -1,10 +1,13 @@
-use crate::streaming::model::stream_item::Marker;
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
-use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
+use crate::streaming::model::sitem::SItem;
+use crate::streaming::model::stream_item::Marker;
 use crate::streaming::partitioning::PartitionRange;
 use crate::streaming::runtime::Runtime;
+use crate::streaming::serialisation::state_serialisation::SerialiseToStateBytes;
+use crate::streaming::state::latest_checkpoint_model_2::ParentState;
 use crate::streaming::state::rocksdb_state_backend::RocksDBStateBackend;
+use crate::streaming::utils::fiber_stream::{FiberStream, SingleFiberStream};
 use async_trait::async_trait;
 use datafusion::common::{internal_datafusion_err, record_batch, DataFusionError};
 use eyeball::{AsyncLock, SharedObservable};
@@ -12,8 +15,6 @@ use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::streaming::model::sitem::SItem;
-use crate::streaming::serialisation::state_serialisation::SerialiseToStateBytes;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CountStarOperator {}
@@ -48,8 +49,6 @@ impl CountStarFunction {
     }
 }
 
-const COUNT_STATE_KEY: &str = "count";
-
 #[async_trait]
 impl OperatorFunction for CountStarFunction {
     async fn init(
@@ -66,7 +65,9 @@ impl OperatorFunction for CountStarFunction {
 
         // Create the rocksdb database that will hold the incremental state
         let state = RocksDBStateBackend::open_new(
-            format!("{}-count-star", state_id),
+            // TODO pass operator id as an argument
+            "count-star".to_string(),
+            state_id.to_string(),
             initial_generation.partitions.clone(),
             runtime.remote_checkpoint_file_system().clone(),
             runtime.local_file_system().clone(),
@@ -149,8 +150,8 @@ impl OperatorFunction for CountStarFunction {
                         CountStreamAction::Marker { marker, local_count, partition_range } => {
                             // Store the count in the state backend
                             let mut state = state.lock().await;
-                            state.put("count", local_count.into_state_bytes()?)?;
-                            state.checkpoint(marker.checkpoint_number as usize, partition_range).await?;
+                            state.put(COUNT_STATE_KEY, local_count.into_state_bytes()?)?;
+                            state.checkpoint(marker.checkpoint_number as usize, partition_range, vec![(0, ParentState::SamePoint)]).await?;
                             // Pass the marker downstream
                             Ok(Some(SItem::Marker(marker)))
                         },
@@ -190,3 +191,44 @@ enum CountStreamAction {
         local_count: u64,
     },
 }
+
+const COUNT_STATE_KEY: &str = "count";
+
+// struct CountState {
+//     local_count: u64,
+//     count_state: RocksDBStateBackend,
+// }
+//
+// impl CountState {
+//     pub async fn init(
+//         state_id: String,
+//         partitions: PartitionRange,
+//         remote_checkpoint_storage: Arc<RemoteCheckpointStorage>,
+//         local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
+//     ) -> Self {
+//         CountState {
+//             count_state: RocksDBStateBackend::open_new(
+//                 format!("{}-count-state", state_id),
+//                 partitions,
+//                 remote_checkpoint_storage,
+//                 local_file_system,
+//             ).await.unwrap_or_else(|e| {
+//                 panic!("Failed to open CountState: {}", e);
+//             })?,
+//         }
+//     }
+//
+//     pub fn add(&mut self, amount: u64) {
+//         self.local_count += amount;
+//     }
+//
+//     pub async fn checkpoint(&mut self, checkpoint_number: usize, partition_range: PartitionRange) -> Result<(), DataFusionError> {
+//         // Update the state with the most recent local count
+//         self.count_state.put(COUNT_STATE_KEY, self.local_count.into_state_bytes()?)?;
+//
+//         // Create a local checkpoint
+//         let local_checkpoint_dir = self.count_state.local_checkpoint(checkpoint_number, partition_range).await?;
+//
+//         // Upload the checkpoint to the remote storage in a background task
+//     }
+// }

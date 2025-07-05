@@ -3,15 +3,15 @@ use datafusion::common::{internal_datafusion_err, DataFusionError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::mem;
-use crate::streaming::state::file_structure_constants::{get_base_checkpoint_dir_path, get_base_working_dir_path, make_working_dir_path};
+use crate::streaming::state::file_structure_constants::{get_base_checkpoint_dir_path, get_base_working_dir_path, make_checkpoint_dir_path, make_working_dir_path};
 
-pub struct LocalRocksDBState {
+pub struct LocalRocksDB {
     local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     open_db: rocksdb::DB,
     working_dir: PathBuf,
 }
 
-impl LocalRocksDBState {
+impl LocalRocksDB {
     pub async fn open_new(
         local_file_system: Arc<dyn FileSystemStorage + Send + Sync>,
     ) -> Result<Self, DataFusionError> {
@@ -20,7 +20,7 @@ impl LocalRocksDBState {
         local_file_system.mkdir_all(&get_base_checkpoint_dir_path()).await?;
 
         let working_dir = make_working_dir_path();
-        let open_db = Self::open_rocksdb_database(&local_file_system, &working_dir)?;
+        let open_db = Self::open_rocksdb_database(local_file_system.as_ref(), &working_dir)?;
         Ok(Self {
             local_file_system,
             open_db,
@@ -44,17 +44,17 @@ impl LocalRocksDBState {
     }
 
     // Takes a mutable reference to ensure that we are the only user of the db when we flush it
-    pub fn create_checkpoint(&mut self, checkpoint_id: &str) -> PathBuf {
+    pub fn create_checkpoint(&mut self, checkpoint_id: &str) -> Result<PathBuf, DataFusionError> {
         // It is necessary to flush all database mem-tables to disk before creating a checkpoint
         self.open_db.flush()
             .map_err(|e| internal_datafusion_err!("Failed to flush RocksDB: {}", e))?;
 
         // Creates a new directory, and writes the checkpoint to it. Rocksdb throws an error if the
         // directory already exists.
-        let checkpoint_dir = self.create_checkpoint_directory_path(checkpoint_id);
+        let checkpoint_dir = make_checkpoint_dir_path(checkpoint_id);
         println!("Creating checkpoint directory at {} with {} entries", checkpoint_dir.display(), self.open_db.iterator(rocksdb::IteratorMode::Start).count());
         self.create_local_rocksdb_checkpoint(&checkpoint_dir)?;
-        checkpoint_dir
+        Ok(checkpoint_dir)
     }
 
     pub async fn load_from_checkpoint_parts(&mut self, checkpoint_part_paths: Vec<PathBuf>) -> Result<(), DataFusionError> {
@@ -108,7 +108,7 @@ impl LocalRocksDBState {
     }
 
     fn create_local_rocksdb_checkpoint(&self, checkpoint_dir: impl AsRef<Path>) -> Result<(), DataFusionError> {
-        let absolute_checkpoint_dir = self.local_file_system.get_physical_path(&checkpoint_dir)?;
+        let absolute_checkpoint_dir = self.local_file_system.get_physical_path(checkpoint_dir.as_ref())?;
         rocksdb::checkpoint::Checkpoint::new(&self.open_db)
             .map_err(|e| internal_datafusion_err!("Failed to create checkpoint: {}", e))?
             .create_checkpoint(&absolute_checkpoint_dir)

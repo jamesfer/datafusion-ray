@@ -107,163 +107,6 @@ impl <'de> Visitor<'de> for RemoteExchangeOperatorVisitor
     }
 }
 
-// struct TwoPart<T, U> {
-//     preamble: T,
-//     content: U,
-// }
-//
-// trait EasyDe {
-//     type PreSerialize<'a>: Serialize;
-//     type PostSerialize<'a>: Serialize;
-//     type PreDeserialize<'a>: Deserialize<'a>;
-//     type PostDeserialize<'a>: Deserialize<'a>;
-//     type Context: Drop;
-//
-//     fn split(&self) -> (Self::PreSerialize, Self::PostSerialize);
-//     fn context(pre: &Self::PreDeserialize) -> Self::Context;
-//     fn join(pre: Self::PreDeserialize, post: Self::PostDeserialize) -> Self;
-// }
-//
-// impl <C, PD, PS, PRD, PRS> Serialize for dyn EasyDe<Context=C, PostDeserialize=PD, PostSerialize=PS, PreDeserialize=PRD, PreSerialize=PRS>
-// where
-//     C: Drop,
-//     PD: Deserialize<'static>,
-//     PS: Deserialize<'static>,
-//     PRD: Deserialize<'static>,
-//     PRS: Deserialize<'static>,
-// {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where S: Serializer
-//     {
-//         let (pre, post) = self.split();
-//         let mut tuple_serializer = serializer.serialize_tuple(2)?;
-//         tuple_serializer.serialize_element(pre)?;
-//         tuple_serializer.serialize_element(post)?;
-//         Ok(())
-//     }
-// }
-//
-// impl <'de, C, PD, PS, PRD, PRS> Deserialize<'de> for dyn EasyDe<Context=C, PostDeserialize=PD, PostSerialize=PS, PreDeserialize=PRD, PreSerialize=PRS>
-// where
-//     C: Drop,
-//     PD: Deserialize<'de>,
-//     PS: Deserialize<'de>,
-//     PRD: Deserialize<'de>,
-//     PRS: Deserialize<'de>,
-// {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where D: Deserializer<'de>
-//     {
-//         deserializer.deserialize_tuple(2, EasyDeVisitor(PhantomData))
-//     }
-// }
-//
-// struct EasyDeVisitor<T>(PhantomData<T>);
-//
-// impl <'de, T> Visitor<'de> for EasyDeVisitor<T>
-// where T: EasyDe
-// {
-//     type Value = T;
-//
-//     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-//         formatter.write_str("a tuple of two elements")
-//     }
-//
-//     fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
-//     where V: de::SeqAccess<'de>,
-//     {
-//         let pre = seq.next_element::<T::PreDeserialize>()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-//         // Deserialize the second element with the context active
-//         let post = {
-//             let _context = Self::Value::context(&pre);
-//             seq.next_element::<T::PostDeserialize>()?.ok_or_else(|| de::Error::invalid_length(1, &self))?
-//         };
-//         Ok(Self::Value::join(pre, post))
-//     }
-// }
-//
-//
-// impl Serialize for RemoteExchangeOperator {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: Serializer,
-//     {
-//         let mut state = serializer.serialize_struct("RemoteExchangeOperator", 3)?;
-//         state.serialize_field("output_stream_id", &self.output_stream_id)?;
-//         state.serialize_field("schema", &self.schema)?;
-//         state.serialize_field("partitioning", &self.partitioning)?;
-//         state.end()
-//     }
-// }
-//
-// impl<'de> Deserialize<'de> for RemoteExchangeOperator {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de>,
-//     {
-//         #[derive(Deserialize)]
-//         #[serde(field_identifier, rename_all = "snake_case")]
-//         enum Field {
-//             OutputStreamId,
-//             Schema,
-//             Partitioning,
-//         }
-//
-//         struct RemoteExchangeOperatorVisitor;
-//
-//         impl<'de> Visitor<'de> for RemoteExchangeOperatorVisitor {
-//             type Value = RemoteExchangeOperator;
-//
-//             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-//                 formatter.write_str("struct RemoteExchangeOperator")
-//             }
-//
-//             fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
-//             where
-//                 V: MapAccess<'de>,
-//             {
-//                 let mut output_stream_id = None;
-//                 let mut schema = None;
-//                 let mut partitioning = None;
-//
-//                 while let Some(key) = map.next_key()? {
-//                     match key {
-//                         Field::OutputStreamId => {
-//                             if output_stream_id.is_some() {
-//                                 return Err(de::Error::duplicate_field("output_stream_id"));
-//                             }
-//                             output_stream_id = Some(map.next_value()?);
-//                         }
-//                         Field::Schema => {
-//                             if schema.is_some() {
-//                                 return Err(de::Error::duplicate_field("schema"));
-//                             }
-//                             schema = Some(map.next_value()?);
-//                         }
-//                         Field::Partitioning => {
-//                             if partitioning.is_some() {
-//                                 return Err(de::Error::duplicate_field("partitioning"));
-//                             }
-//                             partitioning = Some(map.next_value()?);
-//                         }
-//                     }
-//                 }
-//
-//                 let output_stream_id = output_stream_id.ok_or_else(|| de::Error::missing_field("output_stream_id"))?;
-//                 let schema = schema.ok_or_else(|| de::Error::missing_field("schema"))?;
-//                 Ok(RemoteExchangeOperator {
-//                     output_stream_id,
-//                     schema,
-//                     partitioning,
-//                 })
-//             }
-//         }
-//
-//         const FIELDS: &[&str] = &["output_stream_id", "schema", "partitioning"];
-//         deserializer.deserialize_struct("RemoteExchangeOperator", FIELDS, RemoteExchangeOperatorVisitor)
-//     }
-// }
-
 impl RemoteExchangeOperator {
     pub fn new(output_stream_id: String) -> Self {
         Self {
@@ -286,31 +129,59 @@ impl RemoteExchangeOperator {
     }
 }
 
+#[async_trait]
 impl CreateOperatorFunction for RemoteExchangeOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
-        Box::new(RemoteExchangeOperatorFunction::new(self.output_stream_id.clone(), self.partitioning.clone()))
+    async fn create_operator_function(
+        &self,
+        _operator_id: &str,
+        _state_id: &str,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
+        Box::new(RemoteExchangeOperatorFunction::new(
+            self.output_stream_id.clone(),
+            self.partitioning.clone(),
+            runtime,
+            scheduling_details,
+        ).await)
     }
 }
 
 struct RemoteExchangeOperatorFunction {
     output_stream_id: String,
-    runtime: Option<Arc<Runtime>>,
-    scheduling_details_state: Option<Arc<Mutex<(Vec<GenerationSpec>, Vec<RemoteStreamDetails>)>>>,
+    runtime: Arc<Runtime>,
     loaded_checkpoint: usize,
-    data_channel: Option<DataChannelSender>,
-    scheduling_details: Option<Subscriber<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>>,
+    data_channel: DataChannelSender,
+    scheduling_details: Subscriber<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
     partitioning: Option<PartitioningSpec>,
 }
 
 impl RemoteExchangeOperatorFunction {
-    fn new(output_stream_id: String, partitioning: Option<PartitioningSpec>) -> Self {
+    async fn new(
+        output_stream_id: String,
+        partitioning: Option<PartitioningSpec>,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>
+    ) -> Self {
+        let scheduling_details_subscriber = scheduling_details.subscribe().await;
+        let details = scheduling_details_subscriber.get().await;
+        let generations = details.0.as_ref().unwrap();
+        let generation = &generations[0];
+        let partitions = generation.partitions.clone();
+        let partitioning_details = partitioning.as_ref().map(|partitioning| {
+            ChannelPartitioningDetails {
+                partitioning_spec: partitioning.clone(),
+                partitions: partitions.clone(),
+            }
+        });
+        let data_channel = runtime.data_exchange_manager().create_channel(output_stream_id.clone(), partitioning_details).await;
+
         Self {
             output_stream_id,
-            runtime: None,
-            scheduling_details_state: None,
+            runtime,
             loaded_checkpoint: 0,
-            data_channel: None,
-            scheduling_details: None,
+            data_channel,
+            scheduling_details: scheduling_details_subscriber,
             partitioning,
         }
     }
@@ -318,30 +189,6 @@ impl RemoteExchangeOperatorFunction {
 
 #[async_trait]
 impl OperatorFunction for RemoteExchangeOperatorFunction {
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        _state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        let scheduling_details_subscriber = scheduling_details.subscribe().await;
-        let details = scheduling_details_subscriber.get().await;
-        let generations = details.0.as_ref().unwrap();
-        let generation = &generations[0];
-        let partitions = generation.partitions.clone();
-        let partitioning_details = self.partitioning.as_ref().map(|partitioning| {
-            ChannelPartitioningDetails {
-                partitioning_spec: partitioning.clone(),
-                partitions: partitions.clone(),
-            }
-        });
-        let channel = runtime.data_exchange_manager().create_channel(self.output_stream_id.clone(), partitioning_details).await;
-        self.runtime = Some(runtime);
-        self.data_channel = Some(channel);
-        self.scheduling_details = Some(scheduling_details_subscriber);
-        Ok(())
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         // No-op for now
         Ok(())
@@ -351,9 +198,7 @@ impl OperatorFunction for RemoteExchangeOperatorFunction {
         &'a mut self,
         mut inputs: Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>,
     ) -> Result<Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>, DataFusionError> {
-        let channel = self.data_channel.as_mut().ok_or_else(|| {
-            DataFusionError::Execution("Data channel not initialized".to_string())
-        })?;
+        let channel = &mut self.data_channel;
 
         assert_eq!(inputs.len(), 1, "RemoteExchangeOperatorFunction should only have one input");
         let mut input_stream = inputs.pop().unwrap().1;
@@ -377,7 +222,8 @@ impl OperatorFunction for RemoteExchangeOperatorFunction {
         }
 
         println!("RemoteExchange finished writing all results to stream {}", self.output_stream_id);
-        self.data_channel = None;
+        self.data_channel.finish();
+        // self.data_channel = None;
 
         Ok(vec![])
     }

@@ -41,8 +41,15 @@ impl SourceOperator {
     }
 }
 
+#[async_trait]
 impl CreateOperatorFunction for SourceOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
+    async fn create_operator_function(
+        &self,
+        _operator_id: &str,
+        _state_id: &str,
+        _runtime: Arc<Runtime>,
+        _scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
         Box::new(SourceOperatorFunction::new(self.items.clone(), self.num_iterations, self.delay_between_iterations))
     }
 }
@@ -69,15 +76,6 @@ impl SourceOperatorFunction {
 
 #[async_trait]
 impl OperatorFunction for SourceOperatorFunction {
-    async fn init(
-        &mut self,
-        _runtime: Arc<Runtime>,
-        _scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        _state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        Ok(())
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         // Move the offset to the matching marker in the static list
         if checkpoint > 0 {

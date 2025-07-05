@@ -19,19 +19,26 @@ pub enum UpdateGenerationError {
     IncompatibleStartOffsets,
 }
 
+#[async_trait]
 pub trait CreateOperatorFunction {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send>;
+    async fn create_operator_function(
+        &self,
+        operator_id: &str,
+        state_id: &str,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send>;
 }
 
 #[async_trait]
 pub trait OperatorFunction {
     // Called strictly once before any other function
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        state_id: &str,
-    ) -> Result<(), DataFusionError>;
+    // async fn init(
+    //     &mut self,
+    //     runtime: Arc<Runtime>,
+    //     scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    //     state_id: &str,
+    // ) -> Result<(), DataFusionError>;
     
     // Called each time, the operator needs to jump to a checkpoint, including when the operator
     // first starts, even if the operator is starting from the beginning.

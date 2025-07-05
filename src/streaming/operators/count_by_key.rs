@@ -31,27 +31,54 @@ impl CountByKeyOperator {
     }
 }
 
+#[async_trait]
 impl CreateOperatorFunction for CountByKeyOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
-        Box::new(CountByKeyFunction::new(self.key_col.clone()))
+    async fn create_operator_function(
+        &self,
+        operator_id: &str,
+        state_id: &str,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
+        let (generation, _) = scheduling_details.get().await;
+        let initial_generation = generation.as_ref()
+            .ok_or_else(|| DataFusionError::Execution("No generation provided".to_string()))?
+            .first()
+            .ok_or_else(|| DataFusionError::Execution("No initial generation provided".to_string()))?;
+
+        // Create the rocksdb database that will hold the incremental state
+        let state = RocksDBStateBackend::open_new(
+            operator_id.to_string(),
+            state_id.to_string(),
+            initial_generation.partitions.clone(),
+            runtime.remote_checkpoint_file_system().clone(),
+            runtime.local_file_system().clone(),
+        ).await?;
+
+        Box::new(CountByKeyFunction::new(self.key_col.clone(), runtime, Arc::new(Mutex::new(state)), initial_generation.partitions.clone()))
     }
 }
 
 struct CountByKeyFunction {
     key_col: String,
-    runtime: Option<Arc<Runtime>>,
-    state: Option<Arc<Mutex<RocksDBStateBackend>>>,
+    runtime: Arc<Runtime>,
+    state: Arc<Mutex<RocksDBStateBackend>>,
     local_counts: HashMap<u64, u64>,
-    current_partition_range: Option<PartitionRange>,
+    current_partition_range: PartitionRange,
 }
 
 impl CountByKeyFunction {
-    pub fn new(key_col: String) -> Self {
+    pub fn new(
+        key_col: String,
+        runtime: Arc<Runtime>,
+        state: Arc<Mutex<RocksDBStateBackend>>,
+        current_partition_range: PartitionRange
+    ) -> Self {
         CountByKeyFunction {
             key_col,
-            runtime: None,
-            state: None,
-            current_partition_range: None,
+            runtime,
+            state,
+            current_partition_range,
             local_counts: HashMap::new(),
         }
     }
@@ -90,42 +117,10 @@ impl CountByKeyFunction {
 
 #[async_trait]
 impl OperatorFunction for CountByKeyFunction {
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        let (generation, _) = scheduling_details.get().await;
-        let initial_generation = generation.as_ref()
-            .ok_or_else(|| DataFusionError::Execution("No generation provided".to_string()))?
-            .first()
-            .ok_or_else(|| DataFusionError::Execution("No initial generation provided".to_string()))?;
-
-        // Create the rocksdb database that will hold the incremental state
-        let state = RocksDBStateBackend::open_new(
-            format!("{}-count-star", state_id),
-            initial_generation.partitions.clone(),
-            runtime.remote_checkpoint_file_system().clone(),
-            runtime.local_file_system().clone(),
-        ).await?;
-
-        self.runtime = Some(runtime);
-        self.state = Some(Arc::new(Mutex::new(state)));
-        self.current_partition_range = Some(initial_generation.partitions.clone());
-        Ok(())
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         if checkpoint > 0 {
-            let mut state = self.state
-                .as_ref()
-                .ok_or(internal_datafusion_err!("State backend not initialized"))?
-                .lock().await;
-            let partition_range = self.current_partition_range
-                .clone()
-                .ok_or(internal_datafusion_err!("Current partition range not set"))?;
-            state.move_to_checkpoint(checkpoint, partition_range).await?;
+            let mut state = self.state.lock().await;
+            state.move_to_checkpoint(checkpoint, &self.current_partition_range).await?;
 
             // Update the in memory view of the state from the db
             self.local_counts = HashMap::new();
@@ -165,15 +160,11 @@ impl OperatorFunction for CountByKeyFunction {
                         self.update_local_counts(&record_batch)
                     },
                     Some(SItem::Marker(marker)) => {
-                        self.current_partition_range.clone()
-                            .ok_or(internal_datafusion_err!("Current partition range not set"))
-                            .map(|partition_range| {
-                                CountStreamAction::Marker {
-                                    marker: marker.clone(),
-                                    local_counts: self.local_counts.clone(),
-                                    partition_range,
-                                }
-                            })
+                        CountStreamAction::Marker {
+                            marker: marker.clone(),
+                            local_counts: self.local_counts.clone(),
+                            partition_range: self.current_partition_range.clone(),
+                        }
                     },
                     None => Ok(CountStreamAction::EndOfStream {
                         local_counts: self.local_counts.clone()

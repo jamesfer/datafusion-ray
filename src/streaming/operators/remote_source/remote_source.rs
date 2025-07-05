@@ -26,25 +26,40 @@ impl RemoteSourceOperator {
     }
 }
 
+#[async_trait]
 impl CreateOperatorFunction for RemoteSourceOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
-        Box::new(RemoteSourceOperatorFunction::new(self.stream_ids.clone()))
+    async fn create_operator_function(
+        &self,
+        _operator_id: &str,
+        _state_id: &str,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
+        Box::new(RemoteSourceOperatorFunction::new(
+            self.stream_ids.clone(),
+            runtime,
+            scheduling_details,
+        ))
     }
 }
 
 struct RemoteSourceOperatorFunction {
     stream_ids: Vec<String>,
-    runtime: Option<Arc<Runtime>>,
-    scheduling_details_state: Option<SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>>,
+    runtime: Arc<Runtime>,
+    scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
     loaded_checkpoint: usize,
 }
 
 impl RemoteSourceOperatorFunction {
-    fn new(stream_ids: Vec<String>) -> Self {
+    fn new(
+        stream_ids: Vec<String>,
+        runtime: Arc<Runtime>,
+        scheduling_details_state: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>
+    ) -> Self {
         Self {
             stream_ids,
-            runtime: None,
-            scheduling_details_state: None,
+            runtime,
+            scheduling_details_state,
             loaded_checkpoint: 0,
         }
     }
@@ -52,17 +67,6 @@ impl RemoteSourceOperatorFunction {
 
 #[async_trait]
 impl OperatorFunction for RemoteSourceOperatorFunction {
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        _state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        self.runtime = Some(runtime);
-        self.scheduling_details_state = Some(scheduling_details);
-        Ok(())
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         self.loaded_checkpoint = checkpoint;
         Ok(())
@@ -76,18 +80,11 @@ impl OperatorFunction for RemoteSourceOperatorFunction {
     ) -> Result<Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>, DataFusionError> {
         assert_eq!(inputs.len(), 0);
 
-        let scheduling_details_state = self.scheduling_details_state.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("Scheduling details state not initialized. Did you call init()?")
-        })?;
-        let runtime = self.runtime.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("Runtime not initialized. Did you call init()?")
-        })?;
-
         // Create RunningStream directly in the run method
         let running_stream = RunningStream::new(
-            runtime.clone(),
+            self.runtime.clone(),
             self.stream_ids.clone(),
-            scheduling_details_state.clone(),
+            self.scheduling_details_state.clone(),
             self.loaded_checkpoint,
         );
 

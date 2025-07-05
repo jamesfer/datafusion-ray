@@ -25,38 +25,15 @@ impl CountStarOperator {
     }
 }
 
-impl CreateOperatorFunction for CountStarOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
-        Box::new(CountStarFunction::new())
-    }
-}
-
-struct CountStarFunction {
-    runtime: Option<Arc<Runtime>>,
-    state: Option<Arc<Mutex<RocksDBStateBackend>>>,
-    local_count: u64,
-    current_partition_range: Option<PartitionRange>,
-}
-
-impl CountStarFunction {
-    pub fn new() -> Self {
-        CountStarFunction {
-            runtime: None,
-            state: None,
-            current_partition_range: None,
-            local_count: 0,
-        }
-    }
-}
-
 #[async_trait]
-impl OperatorFunction for CountStarFunction {
-    async fn init(
-        &mut self,
+impl CreateOperatorFunction for CountStarOperator {
+    async fn create_operator_function(
+        &self,
+        operator_id: &str,
+        state_id: &str,
         runtime: Arc<Runtime>,
         scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        state_id: &str,
-    ) -> Result<(), DataFusionError> {
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
         let (generation, _) = scheduling_details.get().await;
         let initial_generation = generation.as_ref()
             .ok_or_else(|| DataFusionError::Execution("No generation provided".to_string()))?
@@ -65,29 +42,44 @@ impl OperatorFunction for CountStarFunction {
 
         // Create the rocksdb database that will hold the incremental state
         let state = RocksDBStateBackend::open_new(
-            // TODO pass operator id as an argument
-            "count-star".to_string(),
+            operator_id.to_string(),
             state_id.to_string(),
             initial_generation.partitions.clone(),
             runtime.remote_checkpoint_file_system().clone(),
             runtime.local_file_system().clone(),
         ).await?;
-
-        self.runtime = Some(runtime);
-        self.state = Some(Arc::new(Mutex::new(state)));
-        self.current_partition_range = Some(initial_generation.partitions.clone());
-        Ok(())
+        Box::new(CountStarFunction::new(runtime, Arc::new(Mutex::new(state)), initial_generation.partitions.clone()))
     }
+}
 
+struct CountStarFunction {
+    runtime: Arc<Runtime>,
+    state: Arc<Mutex<RocksDBStateBackend>>,
+    local_count: u64,
+    current_partition_range: PartitionRange,
+}
+
+impl CountStarFunction {
+    pub fn new(
+        runtime: Arc<Runtime>,
+        state: Arc<Mutex<RocksDBStateBackend>>,
+        current_partition_range: PartitionRange
+    ) -> Self {
+        CountStarFunction {
+            runtime,
+            state,
+            current_partition_range,
+            local_count: 0,
+        }
+    }
+}
+
+#[async_trait]
+impl OperatorFunction for CountStarFunction {
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         if checkpoint > 0 {
-            let mut state = self.state
-                .as_ref()
-                .ok_or(internal_datafusion_err!("State backend not initialized"))?
-                .lock().await;
-            let partition_range = self.current_partition_range
-                .clone()
-                .ok_or(internal_datafusion_err!("Current partition range not set"))?;
+            let mut state = self.state.lock().await;
+            let partition_range = self.current_partition_range.clone();
             state.move_to_checkpoint(checkpoint, partition_range).await?;
 
             self.local_count = match state.get(COUNT_STATE_KEY)? {
@@ -125,15 +117,11 @@ impl OperatorFunction for CountStarFunction {
                         Ok(CountStreamAction::RecordBatch)
                     },
                     Some(SItem::Marker(marker)) => {
-                        self.current_partition_range.clone()
-                            .ok_or(internal_datafusion_err!("Current partition range not set"))
-                            .map(|partition_range| {
-                                CountStreamAction::Marker {
-                                    marker: marker.clone(),
-                                    local_count: self.local_count,
-                                    partition_range,
-                                }
-                            })
+                        Ok(CountStreamAction::Marker {
+                            marker: marker.clone(),
+                            local_count: self.local_count,
+                            partition_range: self.current_partition_range.clone(),
+                        })
                     },
                     None => Ok(CountStreamAction::EndOfStream {
                         local_count: self.local_count,

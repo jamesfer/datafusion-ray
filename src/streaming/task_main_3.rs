@@ -58,19 +58,20 @@ impl RunningTask {
         let scheduling_details = SharedObservable::new_async((Some(generations), Some(initial_input_locations)));
 
         // State the operator's main loop in a separate task
-        let function = operator.spec.create_operator_function();
+        let function = operator.spec.create_operator_function(
+            &operator.id,
+            &operator.state_id,
+            runtime,
+            scheduling_details.clone(),
+        );
         let handle = spawn({
             let state = state.clone();
-            let scheduling_details = scheduling_details.clone();
             async move {
                 let result = operator_main_loop(
                     task_id.clone(),
                     function,
-                    &operator.state_id,
-                    runtime,
                     initial_checkpoint,
                     state,
-                    scheduling_details,
                 ).await;
                 match &result {
                     Ok(_) => println!("Task {} completed successfully", task_id),
@@ -122,15 +123,12 @@ impl RunningTask {
 async fn operator_main_loop(
     task_id: String,
     mut function: Box<dyn OperatorFunction + Sync + Send>,
-    state_id: &str,
-    runtime: Arc<Runtime>,
     initial_checkpoint: usize,
     state: Arc<Mutex<RunningTaskState>>,
-    scheduling_details_receiver: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>
 ) -> Result<(), DataFusionError> {
     // Initialisation
     println!("Starting task {}", task_id);
-    function.init(runtime, scheduling_details_receiver, state_id).await?;
+    // function.init(runtime, scheduling_details_receiver, state_id).await?;
     // function.update_scheduling_details(Some(generations.clone()), Some(initial_input_locations.clone())).await?;
 
     // Main loop

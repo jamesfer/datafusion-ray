@@ -55,6 +55,10 @@ impl DataChannelSender {
         }
     }
 
+    pub fn finish(&mut self) {
+        self.cancel_with_status(ChannelStatus::Finished);
+    }
+
     fn cancel_with_status(&mut self, channel_status: ChannelStatus) {
         {
             let mut status = self.state.status.write().unwrap();

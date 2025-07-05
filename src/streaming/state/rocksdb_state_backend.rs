@@ -114,7 +114,7 @@ impl RocksDBStateBackend {
         Ok(())
     }
 
-    pub async fn move_to_checkpoint(&mut self, checkpoint: usize, partition_range: PartitionRange) -> Result<(), DataFusionError> {
+    pub async fn move_to_checkpoint(&mut self, checkpoint: usize, partition_range: &PartitionRange) -> Result<(), DataFusionError> {
         let checkpoint_id = format!("{}", checkpoint);
         println!("Attempting to move to checkpoint {} with partition range {:?} (state id {})", checkpoint, partition_range, self.state_id);
         // Find the checkpoint paths in the remote store we need to use
@@ -206,7 +206,7 @@ impl RocksDBStateBackend {
         Ok(())
     }
 
-    async fn find_checkpoint(&self, checkpoint: usize, partition_range: PartitionRange) -> Result<Vec<(String, PartitionRange)>, DataFusionError> {
+    async fn find_checkpoint(&self, checkpoint: usize, partition_range: &PartitionRange) -> Result<Vec<(String, PartitionRange)>, DataFusionError> {
         // let checkpoint_root_dir = Self::base_checkpoint_directory_path(&self.local_root_dir);
 
         // // Find the checkpoint in the local file system first. This is fairly inefficient

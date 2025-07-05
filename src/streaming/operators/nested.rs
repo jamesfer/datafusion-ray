@@ -9,7 +9,7 @@ use datafusion::error::DataFusionError;
 use eyeball::{AsyncLock, SharedObservable};
 use futures::Stream;
 use futures::StreamExt;
-use futures_util::stream::FuturesUnordered;
+use futures_util::stream::{FuturesOrdered, FuturesUnordered};
 use futures_util::TryStreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,16 +42,36 @@ impl NestedOperator {
     }
 }
 
+#[async_trait]
 impl CreateOperatorFunction for NestedOperator {
-    fn create_operator_function(&self) -> Box<dyn OperatorFunction + Sync + Send> {
+    async fn create_operator_function(
+        &self,
+        _operator_id: &str,
+        _state_id: &str,
+        runtime: Arc<Runtime>,
+        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+    ) -> Box<dyn OperatorFunction + Sync + Send> {
+        let functions = self.operators.iter()
+            .map(|op| {
+                let op = op.clone();
+                let runtime = runtime.clone();
+                let scheduling_details = scheduling_details.clone();
+                async move {
+                    let func = op.spec.create_operator_function(
+                        &op.id,
+                        &op.state_id,
+                        runtime.clone(),
+                        scheduling_details.clone(),
+                    ).await;
+                    (op, func)
+                }
+            })
+            .collect::<FuturesOrdered<_>>()
+            .collect::<Vec<_>>()
+            .await;
         Box::new(NestedOperatorFunction {
             input_stream_ids: self.inputs.clone(),
-            operator_functions: self.operators.iter()
-                .map(|op| (
-                    op.clone(),
-                    op.spec.create_operator_function()
-                ))
-                .collect(),
+            operator_functions: functions,
             output_stream_ids: self.outputs.clone(),
         })
     }
@@ -65,23 +85,6 @@ struct NestedOperatorFunction {
 
 #[async_trait]
 impl OperatorFunction for NestedOperatorFunction {
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        _state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        self.operator_functions.iter_mut()
-            .map(|(def, op)| {
-                let runtime = runtime.clone();
-                let scheduling_details = scheduling_details.clone();
-                async move { op.init(runtime, scheduling_details, &def.state_id).await }
-            })
-            .collect::<FuturesUnordered<_>>()
-            .try_collect::<()>()
-            .await
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         self.operator_functions.iter_mut()
             .map(|(_, op)| async move { op.load(checkpoint).await })

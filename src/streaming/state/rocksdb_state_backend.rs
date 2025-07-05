@@ -374,7 +374,7 @@ mod tests {
         let partition_range = PartitionRange::unit();
         let mut backend = RocksDBStateBackend::open_new(
             "test_state".to_string(),
-            PartitionRange::new(0, 10, 100),
+            PartitionRange::with_max_partitions(0, 10, 100),
             remote_checkpoint_storage.clone(),
             database_file_system,
         ).await.unwrap();

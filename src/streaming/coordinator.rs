@@ -19,6 +19,7 @@ use pyo3::{PyResult, PyErr};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use crate::streaming::state::latest_checkpoint_model_2::OperatorFlowGraph;
 
 pub struct StaticCoordinator {
     compute_runtime: Arc<ComputeRuntime>,
@@ -62,12 +63,14 @@ pub struct ActiveCoordinator {
     remote_checkpoint_storage: Arc<RemoteCheckpointStorage>,
     remote_checkpoint_dir: String,
     tasks: Vec<(TaskDefinition, Vec<(String, RemoteProcessor, PartitionRange)>)>,
+    operator_flow_graph: OperatorFlowGraph,
 }
 
 impl ActiveCoordinator {
     pub async fn start_single_copies(
         compute_runtime: Arc<ComputeRuntime>,
         tasks: Vec<TaskDefinition>,
+        operator_flow_graph: OperatorFlowGraph,
         remote_checkpoint_dir: String,
     ) -> PyResult<Self> {
         let local_fs = object_store::local::LocalFileSystem::new_with_prefix(&remote_checkpoint_dir)
@@ -95,7 +98,8 @@ impl ActiveCoordinator {
             tasks: assigned_tasks.into_iter()
                 .zip(processors.into_iter())
                 .map(|((task, addr), processor)| (task.clone(), vec![(addr, processor, PartitionRange::full())]))
-                .collect()
+                .collect(),
+            operator_flow_graph,
         })
     }
 
@@ -124,13 +128,12 @@ impl ActiveCoordinator {
         // Create n copies of the task with the new partitioning
         // When scaling we always use 2^32 partitions as maybe there is no reason to use any other
         // number
-        let new_partition_cap = 2usize^32;
-        let partition_size_floor = new_partition_cap / new_number;
-        let remaining_size = new_partition_cap % new_number;
-        let partitions = (0..new_number).map(|i| {
+        let partition_size_floor = u64::MAX / new_number;
+        let remaining_size = u64::MAX % new_number;
+        let partitions = (0..new_number as u64).map(|i| {
             let size = partition_size_floor + if i < remaining_size { 1 } else { 0 };
             let start = i * partition_size_floor + if i < remaining_size { i } else { remaining_size };
-            PartitionRange::new(start, start + size, new_partition_cap)
+            PartitionRange::new(start, start + size)
         }).collect::<Vec<_>>();
 
         // Find the most recently completed checkpoint for each partition

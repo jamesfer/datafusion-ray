@@ -117,7 +117,7 @@ mod tests {
         let checkpoint_id = "chk1";
 
         let checkpoint_part_id = checkpoint_storage.start_checkpoint_part(operator_id).await?;
-        let partition_range = PartitionRange::new(0, 1, 10);
+        let partition_range = PartitionRange::with_max_partitions(0, 1, 10);
         
         // For the checkpoint directory, we'll use a mock path since we're testing the JSON metadata
         checkpoint_storage.complete_checkpoint(operator_id, checkpoint_id, checkpoint_part_id, partition_range).await?;

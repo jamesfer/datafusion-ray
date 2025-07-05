@@ -494,7 +494,7 @@ mod tests {
             InitialSchedulingDetails {
                 generations: vec![GenerationSpec {
                     id: "gen1".to_string(),
-                    partitions: PartitionRange::new(0, 2, 2),
+                    partitions: PartitionRange::with_max_partitions(0, 2, 2),
                     start_conditions: vec![],
                 }],
                 input_locations: vec![],
@@ -506,7 +506,7 @@ mod tests {
             locations: vec![RemoteStreamLocation {
                 address: address1.to_string(),
                 offset_range: (0, 2 << 31),
-                partitions: PartitionRange::new(0, 2, 2),
+                partitions: PartitionRange::with_max_partitions(0, 2, 2),
             }],
         };
         // This task takes 1 half of the partitions

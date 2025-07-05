@@ -16,5 +16,4 @@ message StreamingFlightTicketData {
 message PartitionRange {
     uint64 start = 1;
     uint64 end = 2;
-    uint64 partitions = 3;
 }

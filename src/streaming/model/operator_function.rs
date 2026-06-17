@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::runtime::Runtime;
 use crate::streaming::utils::fiber_stream::FiberStream;
@@ -8,6 +9,8 @@ use futures::Stream;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
+use crate::streaming::model::scheduling_details::{ConsumerGroups, SchedulingDetailsSubscriber, SchedulingDetailsUpdate};
 use crate::streaming::model::sitem::SItem;
 
 pub enum UpdateGenerationError {
@@ -26,20 +29,12 @@ pub trait CreateOperatorFunction {
         operator_id: &str,
         state_id: &str,
         runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
+        scheduling_details: SchedulingDetailsSubscriber,
     ) -> Box<dyn OperatorFunction + Sync + Send>;
 }
 
 #[async_trait]
 pub trait OperatorFunction {
-    // Called strictly once before any other function
-    // async fn init(
-    //     &mut self,
-    //     runtime: Arc<Runtime>,
-    //     scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-    //     state_id: &str,
-    // ) -> Result<(), DataFusionError>;
-    
     // Called each time, the operator needs to jump to a checkpoint, including when the operator
     // first starts, even if the operator is starting from the beginning.
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError>;
@@ -78,6 +73,7 @@ pub trait OperatorFunction {
         &'a mut self,
         inputs: Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>,
     ) -> Result<Vec<(usize, Box<dyn FiberStream<Item=Result<SItem, DataFusionError>> + Send + Sync + 'a>)>, DataFusionError>;
+
     // Lists the most recently completed checkpoint. Used to know where the operator should resume
     // from when it needs to restart or reset back in time.
     // TODO what about stateless operators?
@@ -87,15 +83,6 @@ pub trait OperatorFunction {
 
 #[async_trait]
 impl OperatorFunction for Box<dyn OperatorFunction + Sync + Send> {
-    async fn init(
-        &mut self,
-        runtime: Arc<Runtime>,
-        scheduling_details: SharedObservable<(Option<Vec<GenerationSpec>>, Option<Vec<RemoteStreamDetails>>), AsyncLock>,
-        state_id: &str,
-    ) -> Result<(), DataFusionError> {
-        self.as_mut().init(runtime, scheduling_details, state_id).await
-    }
-
     async fn load(&mut self, checkpoint: usize) -> Result<(), DataFusionError> {
         self.as_mut().load(checkpoint).await
     }
@@ -118,6 +105,35 @@ impl OperatorFunction for Box<dyn OperatorFunction + Sync + Send> {
 
 
 
+
+
+// Go back to model where operators contain references to their children. Can always support local
+// loops via a shared runtime state.
+//
+
+
+
+pub trait OperatorFunctionSplit {
+    // Outer future should return fairly quickly, so we can continue to use the operator to
+    // communicate updates
+    // Inner future should be used to run the operator processing itself, and can take a long time,
+    // or last forever
+    fn run(
+        &mut self,
+        checkpoint: usize,
+        inputs: Vec<(usize, Vec<Pin<Box<dyn Stream<Item=Result<SItem, DataFusionError>> + Send + Sync>>>)>,
+    ) -> Result<BoxFuture<Result<Vec<(usize, Vec<Pin<Box<dyn Stream<Item=Result<SItem, DataFusionError>> + Send + Sync>>>)>, DataFusionError>>, DataFusionError>;
+
+    async fn update_scheduling_details(
+        &mut self,
+        details: SchedulingDetailsUpdate,
+    ) -> Result<(), DataFusionError>;
+
+    async fn update_consumer_groups(
+        &mut self,
+        consumer_groups: HashMap<String, ConsumerGroups>,
+    ) -> Result<(), DataFusionError>;
+}
 
 
 // Idea to separate the runtime part of the operator, that could use mutable data, from the part

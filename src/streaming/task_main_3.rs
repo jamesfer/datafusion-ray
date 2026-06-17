@@ -1,4 +1,4 @@
-use crate::streaming::model::generation::{RemoteStreamDetails, GenerationSpec, TaskSchedulingDetailsUpdate};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::model::operator_definition::OperatorDefinition;
 use crate::streaming::model::operator_function::{CreateOperatorFunction, OperatorFunction};
 use crate::streaming::runtime::Runtime;
@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use crate::streaming::model::scheduling_details::SchedulingDetailsUpdate;
 
 #[derive(Debug)]
 struct OutOfOrderGenerationsError {
@@ -91,7 +92,7 @@ impl RunningTask {
         })
     }
 
-    pub async fn update_scheduling_details(&self, details: TaskSchedulingDetailsUpdate) {
+    pub async fn update_scheduling_details(&self, details: SchedulingDetailsUpdate) {
         let generation = details.generation;
         let input_details = details.input_details;
 

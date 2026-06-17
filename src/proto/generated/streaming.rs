@@ -17,6 +17,4 @@ pub struct PartitionRange {
     pub start: u64,
     #[prost(uint64, tag = "2")]
     pub end: u64,
-    #[prost(uint64, tag = "3")]
-    pub partitions: u64,
 }

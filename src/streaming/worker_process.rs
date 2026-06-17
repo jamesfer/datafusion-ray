@@ -1,5 +1,5 @@
 use crate::flight::FlightHandler;
-use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails, TaskSchedulingDetailsUpdate};
+use crate::streaming::model::generation::{GenerationSpec, RemoteStreamDetails};
 use crate::streaming::runtime::Runtime;
 use crate::streaming::model::task_definition::TaskDefinition;
 use crate::streaming::task_main_3::RunningTask;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use crate::streaming::state::remote_checkpoint_storage::RemoteCheckpointStorage;
 use crate::streaming::state::file_system::{FileSystemStorage, TempdirFileSystemStorage};
 use object_store::local::LocalFileSystem;
+use crate::streaming::model::scheduling_details::SchedulingDetailsUpdate;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InitialSchedulingDetails {
@@ -114,7 +115,7 @@ impl WorkerProcess {
         }
     }
 
-    pub async fn update_input(&self, task_id: String, task_scheduling_details_update: TaskSchedulingDetailsUpdate) -> Result<(), DataFusionError> {
+    pub async fn update_input(&self, task_id: String, task_scheduling_details_update: SchedulingDetailsUpdate) -> Result<(), DataFusionError> {
         let running_tasks = self.running_tasks.read();
         match running_tasks.get(&task_id) {
             None => {
@@ -140,7 +141,6 @@ mod tests {
     use crate::streaming::operators::remote_source::remote_source::RemoteSourceOperator;
     use crate::streaming::operators::source::SourceOperator;
     use crate::streaming::partitioning::{PartitionRange, PartitioningSpec};
-    use crate::streaming::state::file_system::TempdirFileSystemStorage;
     use crate::streaming::model::task_definition::TaskDefinition;
     use crate::streaming::utils::retry::retry_future;
     use crate::streaming::utils::test_utils::make_temp_dir;

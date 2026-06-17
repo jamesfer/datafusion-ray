@@ -31,8 +31,3 @@ pub struct GenerationSpec {
     pub partitions: PartitionRange,
     pub start_conditions: Vec<(String, GenerationStartOffset)>,
 }
-
-pub struct TaskSchedulingDetailsUpdate {
-    pub generation: Option<GenerationSpec>,
-    pub input_details: Option<Vec<RemoteStreamDetails>>,
-}
